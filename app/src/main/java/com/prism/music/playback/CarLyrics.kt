@@ -116,6 +116,8 @@ class LyricsOverlayPlayer(player: Player) : ForwardingSimpleBasePlayer(player) {
 
     /** Fades a pause or play in (1.7.8, A5): true when it took the change over, false to make it at once. */
     var gentle: ((play: Boolean) -> Boolean)? = null
+    /** Handles Next through Intelligent AutoMix when a guarded incoming cue exists. */
+    var intelligentNext: (() -> Boolean)? = null
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): com.google.common.util.concurrent.ListenableFuture<*> {
         if (gentle?.invoke(playWhenReady) == true) return com.google.common.util.concurrent.Futures.immediateVoidFuture()
@@ -123,6 +125,10 @@ class LyricsOverlayPlayer(player: Player) : ForwardingSimpleBasePlayer(player) {
     }
 
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): com.google.common.util.concurrent.ListenableFuture<*> {
+        if (
+            seekCommand in setOf(Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM) &&
+            intelligentNext?.invoke() == true
+        ) return com.google.common.util.concurrent.Futures.immediateVoidFuture()
         val order = shown
         val real = if (order != null && mediaItemIndex in order.indices) order[mediaItemIndex] else mediaItemIndex
         return super.handleSeek(real, positionMs, seekCommand)

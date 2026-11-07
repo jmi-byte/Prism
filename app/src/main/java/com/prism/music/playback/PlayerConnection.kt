@@ -701,7 +701,9 @@ class PlayerConnection(private val context: Context, private val c: AppContainer
         if (service?.gentle(play) != true) { if (play) p.play() else p.pause() }
     }
 
-    fun next() = withPlayer { it.seekToNext() }
+    fun next() = withPlayer { p ->
+        if (service?.nextWithIntelligentAutoMix() != true) p.seekToNext()
+    }
     fun previous() = withPlayer { it.seekToPrevious() }
 
     /** Calls [done] once the player is reached (after commands asked for before it, such as a widget's), at once if it is. */

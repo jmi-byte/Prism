@@ -281,6 +281,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         scope.launch { c.settings.flow.map { it.skipSilence to it.sound.skipSilenceEpisodes }.distinctUntilChanged().collect { applySkipSilence() } }
         scope.launch { c.settings.flow.map { it.sound.normalizeTarget to it.sound.normalizeAlbums }.distinctUntilChanged().drop(1).collect { applyNormalization() } }
         sessionPlayer.gentle = ::gentle
+        sessionPlayer.intelligentNext = ::nextWithIntelligentAutoMix
         scope.launch { c.settings.flow.map { it.behavior.pauseOnMute }.distinctUntilChanged().collect { muteWatch.update() } }
         scope.launch { c.settings.flow.map { it.audioDiagnostics }.distinctUntilChanged().collect { on -> AudioDiagnostics.setEnabled(on) { AudioDiagnostics.about(c) } } }
         // The buttons beside play follow Settings → Player → Buttons as soon as they're changed.
@@ -481,6 +482,24 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             fromSongId = a.id,
             toSongId = b.id,
         )
+    }
+
+    /**
+     * Next while Intelligent AutoMix is on uses the analysed incoming cue for this exact pair. Ordinary Next remains
+     * unchanged when analysis is unavailable or unsafe. A listener asking to move now does not wait for the outgoing
+     * song's future automatic transition point.
+     */
+    internal fun nextWithIntelligentAutoMix(): Boolean {
+        if (!com.prism.music.BuildConfig.AUTOMIX_DJ || !c.settings.current.intelligentAutoMix) return false
+        val from = player.currentMediaItem ?: return false
+        val toIndex = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET && it != player.currentMediaItemIndex } ?: return false
+        val to = player.getMediaItemAt(toIndex)
+        val entry = intelligentAutoMixEntry(from, to) ?: return false
+        if (::mix.isInitialized) mix.stopBlend()
+        AudioDiagnostics.log("automix", "Next ${from.mediaId} -> ${to.mediaId} at ${entry / 1000} s")
+        player.seekTo(toIndex, entry)
+        if (player.playbackState == Player.STATE_IDLE) player.prepare()
+        return true
     }
 
     /**

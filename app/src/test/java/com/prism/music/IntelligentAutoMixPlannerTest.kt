@@ -201,8 +201,21 @@ class IntelligentAutoMixPlannerTest {
     }
 
     @Test
-    fun incomingSongKeepsItsOpeningWhenTheHighlightIsUnknown() {
-        assertEquals(0L, IntelligentAutoMixPlanner.entryPoint(240_000, null, listOf(40_000), tempo()))
+    fun incomingSongStillKeepsItsOpeningWhenNoStructureIsKnown() {
+        assertEquals(0L, IntelligentAutoMixPlanner.entryPoint(240_000, null))
+    }
+
+    @Test
+    fun incomingSongUsesAPhraseRestartWhenTheHighlightIsUnknown() {
+        assertEquals(22_000L, IntelligentAutoMixPlanner.entryPoint(240_000, null, listOf(6_000, 22_000, 61_000)))
+    }
+
+    @Test
+    fun incomingSongUsesAMeasuredBeatWhenTheHighlightIsUnknown() {
+        assertEquals(
+            20_000L,
+            IntelligentAutoMixPlanner.entryPoint(240_000, null, tempo = tempo(firstBeatMs = 0, outroBeatMs = 180_000)),
+        )
     }
 
     @Test

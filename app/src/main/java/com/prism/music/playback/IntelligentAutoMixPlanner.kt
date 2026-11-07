@@ -104,10 +104,16 @@ object IntelligentAutoMixPlanner {
         phraseBoundariesMs: List<Long> = emptyList(),
         tempo: Tempo? = null,
     ): Long {
-        val best = bestPartStartMs?.takeIf { it in EARLIEST_ENTRY_MS until durationMs } ?: return 0
-        val latest = minOf(LATEST_ENTRY_MS, durationMs - ENTRY_KEEP_MS, best - 2_000L)
+        val best = bestPartStartMs?.takeIf { it in EARLIEST_ENTRY_MS until durationMs }
+        val latest = minOf(
+            LATEST_ENTRY_MS,
+            durationMs - ENTRY_KEEP_MS,
+            best?.minus(2_000L) ?: FALLBACK_LATEST_ENTRY_MS,
+        )
         if (latest < EARLIEST_ENTRY_MS) return 0
-        val target = (best - ENTRY_LEAD_MS).coerceIn(EARLIEST_ENTRY_MS, latest)
+        // A known highlight gets a lead-in. Without one, prefer a conservative phrase restart around twenty seconds;
+        // this lets AutoMix skip a long opening instead of silently reverting every such song to 0:00.
+        val target = (best?.minus(ENTRY_LEAD_MS) ?: FALLBACK_ENTRY_MS).coerceIn(EARLIEST_ENTRY_MS, latest)
         phraseBoundariesMs.filter { it in EARLIEST_ENTRY_MS..latest && abs(it - target) <= ENTRY_WINDOW_MS }
             .distinct().minWithOrNull(compareBy<Long> { abs(it - target) }.thenBy { it })?.let { return it }
 
@@ -117,6 +123,9 @@ object IntelligentAutoMixPlanner {
         val beats = Math.round((target - anchor) / t.periodMs)
         return (anchor + beats * t.periodMs).toLong().takeIf { it in EARLIEST_ENTRY_MS..latest } ?: 0
     }
+
+    private const val FALLBACK_ENTRY_MS = 20_000L
+    private const val FALLBACK_LATEST_ENTRY_MS = 45_000L
 
     /** Phrase boundaries that could actually be selected for this song, used by both planning and diagnostics. */
     fun usablePhraseBoundaries(durationMs: Long, bestPartStartMs: Long?, phraseBoundariesMs: List<Long>): List<Long> {

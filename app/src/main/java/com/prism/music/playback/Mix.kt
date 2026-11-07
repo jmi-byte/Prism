@@ -270,7 +270,7 @@ class MixEngine(
         val next = main.getMediaItemAt(toIndex)
         if (next.mediaId.isBlank() || next.mediaId == item.mediaId || !allowed(item, next)) return null
         val a = tempo.cached(item.mediaId)
-        val nextDur = (next.mediaMetadata.durationMs ?: 0L).takeIf { it > 0 } ?: Long.MAX_VALUE
+        val nextDur = knownDurationMs(next) ?: Long.MAX_VALUE
         val automatic = auto()
         val len = minOf(if (automatic) autoLengthMs(a, tempo.cached(next.mediaId)) else length, dur / 3, nextDur / 3)
         if (len < 1000 || dur < 30_000) return null
@@ -300,7 +300,10 @@ class MixEngine(
         if (!allowed(item, next)) return noBlend(item, "not blended here (an album playing through, a video, live, a podcast, Sing, Listen Together or casting)")
         val a = tempo.cached(item.mediaId)
         val b = tempo.cached(next.mediaId)
-        val nextDur = (next.mediaMetadata.durationMs ?: 0L).takeIf { it > 0 } ?: Long.MAX_VALUE
+        // Queued YouTube Music items carry their duration in Prism's encoded Song before Media3 has opened them.
+        // Reading only MediaMetadata.durationMs made it look unknown here, which discarded AutoMix's incoming cue and
+        // then invalidated the prepared plan on every tick.
+        val nextDur = knownDurationMs(next) ?: Long.MAX_VALUE
         val len = minOf(chosenLength(item, next, a, b, length), dur / 3, nextDur / 3)
         if (len < 1000 || dur < 30_000) return noBlend(item, "a song too short to blend (${dur / 1000} s, next ${nextDur.takeIf { it != Long.MAX_VALUE }?.let { it / 1000 } ?: "?"} s)")
         val end = (a?.lastSoundMs?.takeIf { it in dur / 2..dur } ?: dur)
@@ -338,6 +341,10 @@ class MixEngine(
         if (early == null && start < dur / 2) return noBlend(item, "the blend would start before the song's middle")
         return Plan(item.mediaId, next.mediaId, toIndex, start, inMs, len, ratio, beats, beatMs, early, guardedIn)
     }
+
+    private fun knownDurationMs(item: MediaItem): Long? =
+        item.mediaMetadata.durationMs?.takeIf { it > 0 }
+            ?: item.toSong()?.durationSec?.takeIf { it > 0 }?.times(1000L)
 
     /** The queue and guarded decision must still describe exactly the plan that was prepared. */
     private fun planStillValid(p: Plan): Boolean {
