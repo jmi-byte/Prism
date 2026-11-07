@@ -347,7 +347,7 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
     val totalDuration = c.player.duration.coerceAtLeast(1)
     val autoStatus = when {
         !settings.intelligentAutoMix -> "Off — tap to turn on"
-        plan != null -> "Next mix in ~${clock((plan.transitionAtMs - position).coerceAtLeast(0))} · Beat match ✓ · Smooth blend"
+        plan != null -> "Next mix in ~${clock((plan.transitionAtMs - position).coerceAtLeast(0))} · ${plan.boundary.label()} · Short blend"
         next == null -> "Add another song for a transition"
         exactDecision != null -> "Analysis complete — no safe early cue for this pair"
         else -> "Analysing the current and next song…"
@@ -556,10 +556,14 @@ private fun QueuePlan(c: AppContainer, onPicked: () -> Unit) {
     val queue by c.player.queue.collectAsState()
     val currentIndex by c.player.currentIndex.collectAsState()
     val decision by c.intelligentAutoMixShadow.decision.collectAsState()
+    // Play order, not list order: with shuffle on, the next song is not necessarily the row below the current one.
+    // This is the same order PlaybackService plans for, so the card and the actual transition always agree.
+    val upNext by c.player.upNext.collectAsState()
     val current = queue.getOrNull(currentIndex)?.song
-    val nextIndex = (currentIndex + 1).takeIf { it in queue.indices }
-    val next = nextIndex?.let { queue[it].song }
-    val plan = decision?.takeIf { it.songId == current?.id && it.nextSongId == next?.id }?.plan
+    val coming = upNext.mapNotNull(queue::getOrNull)
+    val next = coming.firstOrNull()?.song
+    val exactDecision = decision?.takeIf { it.songId == current?.id && it.nextSongId == next?.id }
+    val plan = exactDecision?.plan
     var showPlan by remember { mutableStateOf(true) }
 
     if (queue.isEmpty()) {
@@ -581,31 +585,38 @@ private fun QueuePlan(c: AppContainer, onPicked: () -> Unit) {
                 SegmentButton("AutoMix Plan", showPlan, Modifier.weight(1f)) { showPlan = true }
             }
         }
-        current?.let { playing -> item { CurrentPlanCard(playing, plan?.transitionAtMs) } }
+        current?.let { playing -> item { CurrentPlanCard(playing, plan?.transitionAtMs, analysed = exactDecision != null) } }
         if (showPlan && next != null) item {
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF6FF)), shape = RoundedCornerShape(20.dp)) {
                 Column(Modifier.fillMaxWidth().padding(15.dp)) {
-                    Text("→ Transition to (Beat Matched)", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 13.sp)
+                    Text(plan?.let { "→ Transition to (${it.boundary.label()})" } ?: "→ Transition to", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 13.sp)
                     Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         AsyncImage(next.thumbnail, null, Modifier.size(60.dp).clip(RoundedCornerShape(13.dp)))
                         Column(Modifier.padding(horizontal = 11.dp).weight(1f)) {
                             Text(next.title, color = VelouraNavy, fontWeight = FontWeight.Black, maxLines = 1)
                             Text(next.artistText, color = VelouraMuted, maxLines = 1)
-                            Text(if (plan == null) "Waiting for a safe cue" else "Incoming cue ${clock(plan.entryAtMs)}", color = VelouraBlue, fontSize = 12.sp)
+                            Text(
+                                when {
+                                    plan != null -> "Incoming cue ${clock(plan.entryAtMs)}"
+                                    exactDecision != null -> "No safe early cue — normal playback"
+                                    else -> "Waiting for a safe cue"
+                                },
+                                color = VelouraBlue, fontSize = 12.sp,
+                            )
                         }
                     }
                 }
             }
         }
         item { Text("Up Next", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 20.sp) }
-        itemsIndexed(queue.drop(currentIndex + 1), key = { _, entry -> entry.uid }) { offset, entry ->
-            SongRow(entry.song, "#${currentIndex + offset + 2}") { c.player.skipTo(currentIndex + offset + 1); onPicked() }
+        itemsIndexed(coming, key = { _, entry -> entry.uid }) { offset, entry ->
+            SongRow(entry.song, "#${offset + 2}") { c.player.skipTo(entry.index); onPicked() }
         }
     }
 }
 
 @Composable
-private fun CurrentPlanCard(song: Song, transitionAtMs: Long?) {
+private fun CurrentPlanCard(song: Song, transitionAtMs: Long?, analysed: Boolean) {
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(22.dp)) {
         Column(Modifier.fillMaxWidth().padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -617,7 +628,7 @@ private fun CurrentPlanCard(song: Song, transitionAtMs: Long?) {
                 }
                 Column(horizontalAlignment = Alignment.End) {
                     Text("Mix out at", color = VelouraMuted, fontSize = 10.sp)
-                    Text(transitionAtMs?.let(::clock) ?: "Analysing", color = VelouraBlue, fontWeight = FontWeight.Black)
+                    Text(transitionAtMs?.let(::clock) ?: if (analysed) "Song end" else "Analysing", color = VelouraBlue, fontWeight = FontWeight.Black)
                 }
             }
             Waveform(
@@ -684,4 +695,10 @@ private suspend fun playYouTubeLink(c: AppContainer, uri: Uri): String? {
 private fun clock(ms: Long): String {
     val all = (ms.coerceAtLeast(0) / 1000).toInt()
     return "%d:%02d".format(all / 60, all % 60)
+}
+
+/** What the planner actually aligned the transition to. Beat matching itself is decided later by MixEngine. */
+private fun com.prism.music.playback.AutoMixBoundary.label(): String = when (this) {
+    com.prism.music.playback.AutoMixBoundary.PHRASE -> "Phrase-aligned"
+    com.prism.music.playback.AutoMixBoundary.BEAT -> "Beat-aligned"
 }
