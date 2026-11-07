@@ -92,6 +92,10 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" />
                 <data android:host="music.youtube.com" />
+                <data android:host="youtube.com" />
+                <data android:host="www.youtube.com" />
+                <data android:host="m.youtube.com" />
+                <data android:host="youtu.be" />
             </intent-filter>
             <!-- YouTube / YouTube Music links shared from other apps ("Play in Prism"). -->
             <intent-filter android:label="@string/open_in_prism">
