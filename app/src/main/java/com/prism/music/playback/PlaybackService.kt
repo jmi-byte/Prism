@@ -330,6 +330,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch {
             c.settings.flow.map { it.intelligentAutoMix }.distinctUntilChanged().collect {
                 scheduleAutoMixShadow(c.bestParts.current.value, force = true)
+                scheduleAutoMixQueuePreAnalysis(force = true)
             }
         }
         // Sing: getting the playing and next songs ready, and the key moved for the singer.
@@ -606,6 +607,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
 
     override fun onDestroy() {
         autoMixShadowJob?.cancel()
+        autoMixQueueJob?.cancel()
         c.intelligentAutoMixShadow.clear()
         lockScreen.stop()
         if (PlaybackServices.running == this::class.java) PlaybackServices.running = null
@@ -734,6 +736,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         // Recently played (#296: not while history is paused).
         if (!com.prism.music.data.HistoryPause.paused(c.settings.current.behavior)) scope.launch(Dispatchers.IO) { c.library.recordPlayed(song) }
         scope.launch { c.bestParts.onSongStarted(song) }
+        scheduleAutoMixQueuePreAnalysis()
         singAhead()
         djAhead()
         smartAhead()
@@ -764,8 +767,12 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     }
 
     private data class AutoMixShadowInput(val songId: String, val nextSongId: String?, val bestPartStartMs: Long?)
+    private data class AutoMixPrepared(val bestPartStartMs: Long?)
     private var autoMixShadowInput: AutoMixShadowInput? = null
     private var autoMixShadowJob: kotlinx.coroutines.Job? = null
+    private var autoMixQueueJob: kotlinx.coroutines.Job? = null
+    private var autoMixQueueKey: String? = null
+    private val autoMixPrepared = LinkedHashMap<String, AutoMixPrepared>()
 
     /** The actual next window, including repeat-all; repeat-one has no distinct next song to mix into. */
     private fun autoMixNextSongId(): String? {
@@ -788,17 +795,76 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     private fun scheduleAutoMixShadow(best: com.prism.music.data.BestParts.Current?, force: Boolean = false) {
         if (!com.prism.music.BuildConfig.AUTOMIX_DJ) return
         val song = player.currentMediaItem?.toSong()
-        if (song == null || song.isEpisode || song.isLive || song.durationSec <= 0 || best?.songId != song.id || best.resolved != true) {
+        val prepared = song?.id?.let(autoMixPrepared::get)
+        val resolvedBest = best?.takeIf { it.songId == song?.id && it.resolved }?.startMs ?: prepared?.bestPartStartMs
+        val signalsReady = best?.let { it.songId == song?.id && it.resolved } == true || prepared != null
+        if (song == null || song.isEpisode || song.isLive || song.durationSec <= 0 || !signalsReady) {
             autoMixShadowJob?.cancel()
             autoMixShadowInput = null
             if (c.intelligentAutoMixShadow.decision.value?.songId != song?.id) c.intelligentAutoMixShadow.clear()
             return
         }
-        val input = AutoMixShadowInput(song.id, autoMixNextSongId(), best.startMs)
+        val input = AutoMixShadowInput(song.id, autoMixNextSongId(), resolvedBest)
         if (!force && input == autoMixShadowInput) return
         autoMixShadowInput = input
         autoMixShadowJob?.cancel()
         autoMixShadowJob = scope.launch { evaluateAutoMixShadow(song, input) }
+    }
+
+    /**
+     * Warms the musical signals for the current song and the next few songs in actual play order. The underlying
+     * BestParts, lyrics and MixTempo stores are the cache: when a song becomes current, publishing its exact pair plan
+     * is local work instead of waiting on network and decoder work near the transition.
+     */
+    private fun scheduleAutoMixQueuePreAnalysis(force: Boolean = false) {
+        if (!com.prism.music.BuildConfig.AUTOMIX_DJ) return
+        if (!c.settings.current.intelligentAutoMix) {
+            autoMixQueueJob?.cancel(); autoMixQueueJob = null; autoMixQueueKey = null
+            return
+        }
+        val timeline = player.currentTimeline
+        var index = player.currentMediaItemIndex
+        if (timeline.isEmpty || index == C.INDEX_UNSET) return
+        val songs = buildList {
+            repeat(AUTOMIX_PREPARE_SONGS) {
+                if (index == C.INDEX_UNSET) return@repeat
+                player.getMediaItemAt(index).let { item ->
+                    item.toSong()?.takeIf { !it.isEpisode && !it.isLive && item.videoModeId == null && it.durationSec > 0 }
+                        ?.let(::add)
+                }
+                index = timeline.getNextWindowIndex(index, Player.REPEAT_MODE_OFF, player.shuffleModeEnabled)
+            }
+        }.distinctBy { it.id }
+        if (songs.isEmpty()) return
+        val key = songs.joinToString("|") { it.id }
+        if (!force && key == autoMixQueueKey) return
+        autoMixQueueKey = key
+        autoMixQueueJob?.cancel()
+        autoMixQueueJob = scope.launch {
+            val mayDownload = !c.dataSaving() && (c.settings.current.mixTempoOnCellular || !c.network.metered.value)
+            var preparedCount = 0
+            for (song in songs) {
+                if (!isActive || !c.settings.current.intelligentAutoMix) return@launch
+                val best = runCatching { c.bestParts.startMs(song, fetch = mayDownload) }.getOrNull()
+                coroutineScope {
+                    val lyricsWork = async {
+                        runCatching { c.lyrics.best(song, fetch = mayDownload)?.takeIf { it.synced }?.lines }.getOrNull()
+                    }
+                    val tempoWork = async {
+                        c.mixTempo.cached(song.id) ?: runCatching {
+                            c.mixTempo.measure(song.id, network = mayDownload, edges = false)
+                        }.getOrNull()
+                    }
+                    lyricsWork.await(); tempoWork.await()
+                }
+                autoMixPrepared[song.id] = AutoMixPrepared(best)
+                while (autoMixPrepared.size > AUTOMIX_PREPARED_CACHE) autoMixPrepared.remove(autoMixPrepared.keys.first())
+                preparedCount++
+                // Publish the real current pair as soon as its cached inputs are ready. The rest continue quietly.
+                scheduleAutoMixShadow(c.bestParts.current.value, force = true)
+            }
+            AudioDiagnostics.log("automix-prescan", "prepared $preparedCount upcoming songs: ${songs.joinToString { it.id }}")
+        }
     }
 
     /** Gets the inputs needed by Intelligent AutoMix. Analysis is proactive only while the user has enabled it. */
@@ -1055,6 +1121,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         scheduleSave()
         // The planner's answer depends on the actual next song; unchanged queue edits are ignored by the scheduler.
         scheduleAutoMixShadow(c.bestParts.current.value)
+        scheduleAutoMixQueuePreAnalysis(force = true)
         val i = player.nextMediaItemIndex
         val next = if (i == C.INDEX_UNSET) null else player.getMediaItemAt(i).mediaId
         if (next != null && next != warmedNext && player.currentMediaItem != null) prefetchNext()
@@ -3133,5 +3200,9 @@ private const val RESEQUENCE_GAP_MS = 1_500L
 private const val SMART_LOOK_AHEAD = 12
 /** How many queued songs ahead are got ready (their loudness and edges). */
 private const val QUEUE_AHEAD = 3
+/** Current song plus this many coming songs have their AutoMix signals prepared in queue order. */
+private const val AUTOMIX_PREPARE_SONGS = 6
+/** Enough prepared signals for queue edits and Previous without letting the in-memory index grow forever. */
+private const val AUTOMIX_PREPARED_CACHE = 24
 /** How far ahead the player loads: a whole song (and the start of the next, near its end). */
 private const val WHOLE_SONG_MS = 300_000

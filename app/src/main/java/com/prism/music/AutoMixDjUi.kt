@@ -342,11 +342,14 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
     LaunchedEffect(song?.id, playing) { while (true) { position = c.player.position; delay(if (playing) 250 else 700) } }
 
     val next = upNext.firstOrNull()?.let(queue::getOrNull)?.song
-    val plan = decision?.takeIf { it.songId == song?.id && it.nextSongId == next?.id }?.plan
+    val exactDecision = decision?.takeIf { it.songId == song?.id && it.nextSongId == next?.id }
+    val plan = exactDecision?.plan
+    val totalDuration = c.player.duration.coerceAtLeast(1)
     val autoStatus = when {
         !settings.intelligentAutoMix -> "Off — tap to turn on"
         plan != null -> "Next mix in ~${clock((plan.transitionAtMs - position).coerceAtLeast(0))} · Beat match ✓ · Smooth blend"
         next == null -> "Add another song for a transition"
+        exactDecision != null -> "Analysis complete — no safe early cue for this pair"
         else -> "Analysing the current and next song…"
     }
 
@@ -369,11 +372,10 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
                     }
                     Icon(PrismIcons.Heart, "Like", tint = VelouraNavy, modifier = Modifier.size(28.dp))
                 }
-                val duration = c.player.duration.coerceAtLeast(1)
-                Slider(position.coerceIn(0, duration).toFloat(), { c.player.seekTo(it.toLong()) }, valueRange = 0f..duration.toFloat(), modifier = Modifier.padding(top = 12.dp))
+                Slider(position.coerceIn(0, totalDuration).toFloat(), { c.player.seekTo(it.toLong()) }, valueRange = 0f..totalDuration.toFloat(), modifier = Modifier.padding(top = 12.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(clock(position), color = VelouraMuted, fontSize = 12.sp)
-                    Text(clock(duration), color = VelouraMuted, fontSize = 12.sp)
+                    Text(clock(totalDuration), color = VelouraMuted, fontSize = 12.sp)
                 }
             }
         }
@@ -407,7 +409,13 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
                 IconButton({ c.player.next() }) { Icon(PrismIcons.Next, "Next", Modifier.size(31.dp), tint = VelouraNavy) }
             }
         }
-        item { Waveform((position.toFloat() / c.player.duration.coerceAtLeast(1)).coerceIn(0f, 1f), Modifier.fillMaxWidth().height(58.dp)) }
+        item {
+            Waveform(
+                progress = (position.toFloat() / totalDuration).coerceIn(0f, 1f),
+                transitionAt = plan?.let { (it.transitionAtMs.toFloat() / totalDuration).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(58.dp),
+            )
+        }
         next?.let { following -> item { SongRow(following, plan?.entryAtMs?.let { "Cue ${clock(it)}" } ?: "Up next") { c.player.next() } } }
     }
 }
@@ -612,7 +620,11 @@ private fun CurrentPlanCard(song: Song, transitionAtMs: Long?) {
                     Text(transitionAtMs?.let(::clock) ?: "Analysing", color = VelouraBlue, fontWeight = FontWeight.Black)
                 }
             }
-            Waveform(0.56f, Modifier.fillMaxWidth().height(56.dp).padding(top = 8.dp))
+            Waveform(
+                progress = 0f,
+                transitionAt = transitionAtMs?.let { (it.toFloat() / (song.durationSec * 1000L).coerceAtLeast(1)).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().height(56.dp).padding(top = 8.dp),
+            )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("0:00", color = VelouraMuted, fontSize = 11.sp)
                 Text("IN", color = VelouraCyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
@@ -632,7 +644,7 @@ private fun SegmentButton(label: String, selected: Boolean, modifier: Modifier, 
 }
 
 @Composable
-private fun Waveform(progress: Float, modifier: Modifier = Modifier) {
+private fun Waveform(progress: Float, transitionAt: Float? = null, modifier: Modifier = Modifier) {
     Canvas(modifier) {
         val bars = 48
         val step = size.width / bars
@@ -640,9 +652,10 @@ private fun Waveform(progress: Float, modifier: Modifier = Modifier) {
             val x = step * index + step / 2
             val envelope = 0.28f + 0.72f * kotlin.math.abs(sin(index * 0.47)).toFloat()
             val h = size.height * envelope
+            val fraction = index.toFloat() / bars
             val color = when {
-                index.toFloat() / bars < progress * 0.78f -> VelouraBlue
-                index.toFloat() / bars < progress -> VelouraOrange
+                fraction < progress -> VelouraBlue
+                transitionAt != null && fraction >= transitionAt -> VelouraOrange
                 else -> Color(0xFFD6E1ED)
             }
             drawLine(color, Offset(x, (size.height - h) / 2), Offset(x, (size.height + h) / 2), strokeWidth = step * 0.55f, cap = StrokeCap.Round)
