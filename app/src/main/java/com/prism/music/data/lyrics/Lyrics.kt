@@ -37,6 +37,8 @@ data class LyricLine(
     val isGap: Boolean = false,
     /** Background vocals sung with the line ("(Back to let you know)"), word-timed; drawn smaller under it (#66). */
     val background: List<LyricWord> = emptyList(),
+    /** The end was inferred from the next line's start rather than measured by the source. */
+    val endEstimated: Boolean = false,
 ) {
     val isWordSynced: Boolean get() = words.isNotEmpty()
 
@@ -285,7 +287,8 @@ object Lrc {
             val words = if (text.length == s.length) emptyList() else words(s, end + offset).map { w ->
                 w.copy(startMs = (w.startMs - offset).coerceAtLeast(0), endMs = (w.endMs - offset).coerceAtLeast(0))
             }
-            LyricLine(t, text.trim(), end, words = words, isGap = text.isBlank())
+            // The line end still comes from the next line even when individual words have measured ends.
+            LyricLine(t, text.trim(), end, words = words, isGap = text.isBlank(), endEstimated = true)
         }.withLeadingGap()
     }
 

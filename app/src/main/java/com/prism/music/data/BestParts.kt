@@ -20,7 +20,15 @@ class BestParts(private val c: AppContainer) {
      * The playing song's: its heat curve (if YouTube has one), where its best part starts (if it has one), and how far
      * into the song that became known ([knownAtMs]: the player's button stays up a while from then).
      */
-    data class Current(val songId: String, val heat: Heatmap?, val startMs: Long?, val knownAtMs: Long = 0, val mine: Boolean = false)
+    data class Current(
+        val songId: String,
+        val heat: Heatmap?,
+        val startMs: Long?,
+        val knownAtMs: Long = 0,
+        val mine: Boolean = false,
+        /** The heatmap/lyrics lookup has completed, including when it found no highlight. */
+        val resolved: Boolean = false,
+    )
 
     /**
      * Best parts the listener set themselves (hold the player's Best part button, or ⋯ → Your best part): song id → ms
@@ -108,7 +116,10 @@ class BestParts(private val c: AppContainer) {
             }
         } else null
         if (_current.value?.songId != song.id) return
-        _current.value = Current(song.id, heat, startFor(song, heat), knownAtMs = c.player.position, mine = mine(song.id) != null)
+        _current.value = Current(
+            song.id, heat, startFor(song, heat), knownAtMs = c.player.position,
+            mine = mine(song.id) != null, resolved = true,
+        )
     }
 
     /** A coming song's curve, fetched while this one plays (not with data saver on mobile data). */

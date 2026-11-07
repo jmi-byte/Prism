@@ -148,7 +148,14 @@ enum class SettingsSection(val key: String, val title: String, val icon: ImageVe
         APPEARANCE -> tr(R.string.looks_colors_fonts_the_player_and)
         INTERFACE -> listOf(tr(R.string.nav_bar_x, s.navStyle.label), com.prism.music.trp(R.plurals.n_tabs, s.navTabs.size), tr(R.string.mini_player_x, s.miniPlayerStyle.label)).joinToString(" · ")
         PLAYER -> listOfNotNull(tr(R.string.player_layout_x, s.playerLayout.label), s.playerBackground.label, if (s.canvasEnabled) tr(R.string.animated_covers) else null).joinToString(" · ")
-        SOUND -> listOfNotNull(if (s.lossless) tr(R.string.lossless) else tr(R.string.audio_quality_x, s.audioQuality.label), if (s.mix) tr(R.string.crossfade) else null, if (s.normalize) tr(R.string.normalized) else null, if (s.spatial) tr(R.string.prism_spatial) else null, if (s.eq.enabled) "EQ ${com.prism.music.playback.EqPresets.label(s.eq.preset)}" else null).joinToString(" · ")
+        SOUND -> listOfNotNull(
+            if (s.lossless) tr(R.string.lossless) else tr(R.string.audio_quality_x, s.audioQuality.label),
+            if (com.prism.music.BuildConfig.AUTOMIX_DJ && s.intelligentAutoMix) tr(R.string.intelligent_auto_mix) else null,
+            if (s.mix) tr(R.string.crossfade) else null,
+            if (s.normalize) tr(R.string.normalized) else null,
+            if (s.spatial) tr(R.string.prism_spatial) else null,
+            if (s.eq.enabled) "EQ ${com.prism.music.playback.EqPresets.label(s.eq.preset)}" else null,
+        ).joinToString(" · ")
         LYRICS -> listOfNotNull(tr(R.string.first, s.lyricsSources.first().label), if (s.lyricsTranslate) tr(R.string.translated) else null, tr(R.string.sing)).joinToString(" · ")
         LYRICS_LOOK -> tr(R.string.style_2, s.lyricsStyle.label, s.lyricsPosition.label)
         CONTROLS -> tr(R.string.swipes_and_taps_on_the_player)
@@ -1992,6 +1999,10 @@ private fun SoundPage() {
             Chips(com.prism.music.data.prefs.ExplicitContent.entries, s.behavior.explicitContent, { it.label }) { prefs.setExplicitContent(it) }
         }
         Group(tr(R.string.crossfade)) {
+            if (com.prism.music.BuildConfig.AUTOMIX_DJ) Toggle(
+                tr(R.string.intelligent_auto_mix), tr(R.string.intelligent_auto_mix_detail), s.intelligentAutoMix,
+                info = tr(R.string.intelligent_auto_mix_info),
+            ) { prefs.setIntelligentAutoMix(it) }
             Label(tr(R.string.crossfade), info = tr(R.string.crossfade_choice_info))
             Chips(Crossfade.entries, SoundChoices.crossfade(s), { it.label }) { SoundChoices.setCrossfade(prefs, it) }
             // #351: up to 30 s (a song's blend is still at most a third of it: MixEngine.makePlan).

@@ -447,6 +447,8 @@ class AppContainer(val app: Application) {
     )
     /** Songs' best parts, from YouTube's "Most replayed" curves (and the chorus in the lyrics). */
     val bestParts = com.prism.music.data.BestParts(this)
+    /** Read-only Intelligent AutoMix decisions from the playing song; never controls playback. */
+    val intelligentAutoMixShadow = com.prism.music.playback.IntelligentAutoMixShadow()
 
     /** One-off upkeep that runs once per install, in the background, after Prism has settled. */
     private val migrations: android.content.SharedPreferences = app.getSharedPreferences("migrations", android.content.Context.MODE_PRIVATE)

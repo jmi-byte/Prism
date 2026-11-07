@@ -1438,6 +1438,8 @@ data class AppSettings(
     val skipSilence: Boolean = false,
     /** Crossfade: songs fade into each other when one runs into the next (after Spotify's), instead of stopping and starting. */
     val mix: Boolean = false,
+    /** Ends eligible songs early at a conservative phrase or beat boundary after their best part. Off until chosen. */
+    val intelligentAutoMix: Boolean = false,
     /** How long a crossfade lasts, in seconds, when it isn't [mixAuto]. */
     val mixSeconds: Int = 6,
     /** Crossfade works out the best length for each pair of songs, from how one ends and the next begins. */
@@ -1866,6 +1868,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val normalize = booleanPreferencesKey("normalize")
         val skipSilence = booleanPreferencesKey("skip_silence")
         val mix = booleanPreferencesKey("mix")
+        val intelligentAutoMix = booleanPreferencesKey("intelligent_auto_mix")
         val mixSeconds = intPreferencesKey("mix_seconds")
         val mixAuto = booleanPreferencesKey("mix_auto")
         val mixBeatMatch = booleanPreferencesKey("mix_beat_match")
@@ -2227,7 +2230,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
                 "hold_seek_seconds", "canvas_with_downloads", "canvas_with_downloads_cellular", "audio_quality", "cellular_quality",
                 "premium_stream", "autoplay", "autoplay_source", "radio_songs_only", "songs_everywhere", "show_track_length",
                 "audio_diagnostics", "search_keyboard", "double_tap_seek_seconds", "stop_on_swipe_away", "data_saver",
-                "video_continues", "lossless", "lossless_local", "normalize", "skip_silence", "mix", "mix_seconds", "mix_auto",
+                "video_continues", "lossless", "lossless_local", "normalize", "skip_silence", "mix", "intelligent_auto_mix", "mix_seconds", "mix_auto",
                 "mix_beat_match", "mix_tempo_cellular", "content_country", "video_max_height", "cache_size_mb", "download_wifi_only",
                 "download_likes", "smart_downloads", "smart_download_gb", "offline_gb", "smart_downloads_cellular", "eq",
                 "home_layout", "auto_add_sections", "home_hide_kinds", "home_header_picture", "search_sections", "search_chips", "replay_hours", "greeting_text", "greeting_show_name", "home_shortcuts",
@@ -2424,6 +2427,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
             losslessLocal = p[K.losslessLocal] ?: d.losslessLocal,
             normalize = p[K.normalize] ?: d.normalize,
             mix = p[K.mix] ?: d.mix,
+            intelligentAutoMix = p[K.intelligentAutoMix] ?: d.intelligentAutoMix,
             mixSeconds = (p[K.mixSeconds] ?: d.mixSeconds).coerceIn(1, MAX_CROSSFADE_SECONDS),
             mixAuto = p[K.mixAuto] ?: d.mixAuto,
             mixBeatMatch = p[K.mixBeatMatch] ?: d.mixBeatMatch,
@@ -2988,6 +2992,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
     fun setLosslessLocal(v: Boolean) = edit { it[K.losslessLocal] = v }
     fun setNormalize(v: Boolean) = edit { it[K.normalize] = v }
     fun setMix(v: Boolean) = edit { it[K.mix] = v }
+    fun setIntelligentAutoMix(v: Boolean) = edit { it[K.intelligentAutoMix] = v }
     fun setMixSeconds(v: Int) = edit { it[K.mixSeconds] = v.coerceIn(1, MAX_CROSSFADE_SECONDS) }
     fun setMixAuto(v: Boolean) = edit { it[K.mixAuto] = v }
     fun setMixBeatMatch(v: Boolean) = edit { it[K.mixBeatMatch] = v }

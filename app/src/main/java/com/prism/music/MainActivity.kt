@@ -168,7 +168,7 @@ open class MainActivity : ComponentActivity() {
     // Each time Prism comes to the front (at most hourly): it can stay alive for days, with Home never built again (1.8.1.1).
     override fun onResume() {
         super.onResume()
-        container.updates.check()
+        if (!BuildConfig.AUTOMIX_DJ) container.updates.check()
     }
     private val deepLink = MutableStateFlow<Uri?>(null)
 
@@ -208,13 +208,14 @@ open class MainActivity : ComponentActivity() {
         deepLink.value = if (fresh) linkIn(intent) else null
         if (intent.action != Intent.ACTION_MAIN) setIntent(Intent(this, javaClass).setAction(Intent.ACTION_MAIN))
         setContent {
-            CompositionLocalProvider(
-                LocalContainer provides c,
-                com.prism.music.ui.player.LocalPip provides inPip.value,
-                com.prism.music.ui.theme.LocalWindowLayout provides com.prism.music.ui.theme.rememberWindowLayout(),
-            ) {
-                PrismRoot(deepLink)
-            }
+            if (BuildConfig.AUTOMIX_DJ) AutoMixDjRoot(c, deepLink)
+            else CompositionLocalProvider(
+                    LocalContainer provides c,
+                    com.prism.music.ui.player.LocalPip provides inPip.value,
+                    com.prism.music.ui.theme.LocalWindowLayout provides com.prism.music.ui.theme.rememberWindowLayout(),
+                ) {
+                    PrismRoot(deepLink)
+                }
         }
         quietGraphicsLayers()
     }

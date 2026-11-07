@@ -18,18 +18,20 @@ room {
 }
 
 android {
+    val autoMixDjBuild = project.hasProperty("autoMixDj")
     namespace = "com.prism.music"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.prism.music"
+        applicationId = if (autoMixDjBuild) "com.jmibyte.veloura" else "com.prism.music"
         minSdk = 26
         targetSdk = 36
         versionCode = 57
-        versionName = "1.8.2"
+        versionName = if (autoMixDjBuild) "0.1.0" else "1.8.2"
         vectorDrawables { useSupportLibrary = true }
         // The name under the launcher icon; a side-by-side build (below) is called "Prism Dev" so it can't be mistaken for Prism.
-        manifestPlaceholders["appLabel"] = "@string/app_name"
+        manifestPlaceholders["appLabel"] = if (autoMixDjBuild) "Veloura" else "@string/app_name"
+        manifestPlaceholders["appIcon"] = if (autoMixDjBuild) "@drawable/ic_automix_dj" else "@mipmap/ic_launcher"
         // Only the side-by-side test copy can be profiled from adb (simpleperf / Perfetto), for chasing jank (1.7.4).
         manifestPlaceholders["profileable"] = "false"
         // In-app tests (app/src/androidTest, 1.7.9): Prism on a fixed offline setup, YouTube and lyrics answered from
@@ -46,6 +48,7 @@ android {
         buildConfigField("String", "LASTFM_API_KEY", "\"${localProps.getProperty("lastfm.apiKey", "")}\"")
         // Scrobbling (1.7.8) signs its requests with the API account's shared secret; without one it isn't offered.
         buildConfigField("String", "LASTFM_SECRET", "\"${localProps.getProperty("lastfm.secret", "")}\"")
+        buildConfigField("boolean", "AUTOMIX_DJ", autoMixDjBuild.toString())
     }
 
     // Releases are signed with the key in keystore.properties (gitignored, with the .jks beside it).

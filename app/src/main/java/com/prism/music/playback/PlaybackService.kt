@@ -51,7 +51,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -317,6 +319,18 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             }
         }
         scope.launch { c.library.likedIds.collect { updateButtons() } }
+        // Intelligent AutoMix evaluates real songs whenever their best-part signal improves. Playback can consume a
+        // matching decision only through its off-by-default, fail-closed setting and MixEngine's existing safeguards.
+        if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch {
+            c.bestParts.current.collect { scheduleAutoMixShadow(it) }
+        }
+        // Switching AutoMix on must re-run the current song even when its best-part signal has not changed. Previously
+        // that left the feature idle until the next song or queue edit, which looked like the switch did nothing.
+        if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch {
+            c.settings.flow.map { it.intelligentAutoMix }.distinctUntilChanged().collect {
+                scheduleAutoMixShadow(c.bestParts.current.value, force = true)
+            }
+        }
         // Sing: getting the playing and next songs ready, and the key moved for the singer.
         scope.launch {
             kotlinx.coroutines.flow.combine(c.sing.on, c.sing.semitones) { on, st -> on to st }.collect { (on, _) ->
@@ -370,8 +384,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             tempo = c.mixTempo,
             // DJ mode blends every song into the next, beat-matched, at Crossfade's automatic length.
             // Not while casting: the renderer plays one song at a time (and the phone's own player is muted).
-            mixMs = { c.settings.current.let { s -> if ((s.mix || c.dj.onNow) && !c.cast.casting) s.mixSeconds * 1000L else null } },
-            auto = { c.settings.current.mixAuto || c.dj.onNow },
+            mixMs = { c.settings.current.let { s -> if ((s.mix || (com.prism.music.BuildConfig.AUTOMIX_DJ && s.intelligentAutoMix) || c.dj.onNow) && !c.cast.casting) s.mixSeconds * 1000L else null } },
+            auto = { c.settings.current.let { it.mixAuto || (com.prism.music.BuildConfig.AUTOMIX_DJ && it.intelligentAutoMix) } || c.dj.onNow },
             beatMatch = { c.settings.current.mixBeatMatch || c.dj.onNow },
             harmonic = { from, to ->
                 if (!c.dj.onNow) null else {
@@ -387,6 +401,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             pitch = ::pitchNow,
             curve = { c.settings.current.sound.crossfadeCurve },
             state = c.mixState,
+            earlyStart = ::intelligentAutoMixStart,
+            earlyIn = ::intelligentAutoMixEntry,
         ).also { it.start() }
         // Prism Connect: the speaker or TV being cast to plays what this player plays, and its volume is the session's.
         sessionPlayer.remote = object : LyricsOverlayPlayer.Remote {
@@ -429,6 +445,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     private fun mayBlend(from: MediaItem, to: MediaItem): Boolean {
         val a = from.toSong() ?: return false
         val b = to.toSong() ?: return false
+        // With ordinary Crossfade and DJ mode off, only an exact current Intelligent AutoMix decision enables a blend.
+        if (!c.settings.current.mix && !c.dj.onNow && intelligentAutoMixStart(from, to) == null) return false
         if (a.isLive || b.isLive || from.videoModeId != null || to.videoModeId != null) return false
         // Talk doesn't blend.
         if (a.isEpisode || b.isEpisode) return false
@@ -439,6 +457,30 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         // Only while an album plays through (a radio or playlist that puts two of an album's songs side by side blends).
         // An album played as a DJ set is a set: it blends.
         return blendsAcrossAlbum(a.album?.id, b.album?.id, c.queue.source.value.kind == QueueKind.ALBUM, c.settings.current.mixKeepAlbums, c.dj.onNow)
+    }
+
+    /** A stale, disabled, or different-pair decision is indistinguishable from no early transition. */
+    private fun intelligentAutoMixStart(from: MediaItem, to: MediaItem): Long? {
+        val a = from.toSong() ?: return null
+        val b = to.toSong() ?: return null
+        return IntelligentAutoMixActivation.transitionAt(
+            enabled = com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.intelligentAutoMix,
+            decision = c.intelligentAutoMixShadow.decision.value,
+            fromSongId = a.id,
+            toSongId = b.id,
+        )
+    }
+
+    /** The matching decision's musically useful cue into the incoming song; zero preserves its natural opening. */
+    private fun intelligentAutoMixEntry(from: MediaItem, to: MediaItem): Long? {
+        val a = from.toSong() ?: return null
+        val b = to.toSong() ?: return null
+        return IntelligentAutoMixActivation.entryAt(
+            enabled = com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.intelligentAutoMix,
+            decision = c.intelligentAutoMixShadow.decision.value,
+            fromSongId = a.id,
+            toSongId = b.id,
+        )
     }
 
     /**
@@ -543,6 +585,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     }
 
     override fun onDestroy() {
+        autoMixShadowJob?.cancel()
+        c.intelligentAutoMixShadow.clear()
         lockScreen.stop()
         if (PlaybackServices.running == this::class.java) PlaybackServices.running = null
         PlaybackServices.failForTest = null
@@ -697,6 +741,104 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         PlayTileService.update(this)
         carLyrics.refresh()
         scheduleSave()
+    }
+
+    private data class AutoMixShadowInput(val songId: String, val nextSongId: String?, val bestPartStartMs: Long?)
+    private var autoMixShadowInput: AutoMixShadowInput? = null
+    private var autoMixShadowJob: kotlinx.coroutines.Job? = null
+
+    /** The actual next window, including repeat-all; repeat-one has no distinct next song to mix into. */
+    private fun autoMixNextSongId(): String? {
+        val i = player.nextMediaItemIndex
+        if (i == C.INDEX_UNSET || i == player.currentMediaItemIndex) return null
+        val item = player.getMediaItemAt(i)
+        return (item.toSong()?.id ?: item.mediaId).takeIf { it.isNotBlank() }
+    }
+
+    private fun autoMixNextSong(): com.prism.music.data.model.Song? {
+        val i = player.nextMediaItemIndex
+        if (i == C.INDEX_UNSET || i == player.currentMediaItemIndex) return null
+        return player.getMediaItemAt(i).toSong()
+    }
+
+    /** Replaces any in-flight evaluation, and skips queue mutations that leave the current/next pair unchanged. */
+    private fun scheduleAutoMixShadow(best: com.prism.music.data.BestParts.Current?, force: Boolean = false) {
+        if (!com.prism.music.BuildConfig.AUTOMIX_DJ) return
+        val song = player.currentMediaItem?.toSong()
+        if (song == null || song.isEpisode || song.isLive || song.durationSec <= 0 || best?.songId != song.id || best.resolved != true) {
+            autoMixShadowJob?.cancel()
+            autoMixShadowInput = null
+            if (c.intelligentAutoMixShadow.decision.value?.songId != song?.id) c.intelligentAutoMixShadow.clear()
+            return
+        }
+        val input = AutoMixShadowInput(song.id, autoMixNextSongId(), best.startMs)
+        if (!force && input == autoMixShadowInput) return
+        autoMixShadowInput = input
+        autoMixShadowJob?.cancel()
+        autoMixShadowJob = scope.launch { evaluateAutoMixShadow(song, input) }
+    }
+
+    /** Gets the inputs needed by Intelligent AutoMix. Analysis is proactive only while the user has enabled it. */
+    private suspend fun evaluateAutoMixShadow(song: com.prism.music.data.model.Song, input: AutoMixShadowInput) {
+        val enabled = com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.intelligentAutoMix
+        val mayDownloadAnalysis = enabled && !c.dataSaving() &&
+            (c.settings.current.mixTempoOnCellular || !c.network.metered.value)
+        val nextSong = autoMixNextSong()?.takeIf { it.id == input.nextSongId }
+        data class Inputs(
+            val lyrics: List<com.prism.music.data.lyrics.LyricLine>,
+            val tempo: Tempo?,
+            val nextLyrics: List<com.prism.music.data.lyrics.LyricLine>,
+            val nextTempo: Tempo?,
+            val nextBestPartMs: Long?,
+        )
+        val inputs = coroutineScope {
+            val lyricsWork = async {
+                runCatching { c.lyrics.best(song, fetch = enabled)?.takeIf { it.synced }?.lines }.getOrNull().orEmpty()
+            }
+            val tempoWork = async {
+                c.mixTempo.cached(song.id) ?: if (enabled) {
+                    runCatching { c.mixTempo.measure(song.id, network = mayDownloadAnalysis, edges = false) }.getOrNull()
+                } else null
+            }
+            val nextLyricsWork = async {
+                if (!enabled || nextSong == null) emptyList() else
+                    runCatching { c.lyrics.best(nextSong, fetch = true)?.takeIf { it.synced }?.lines }.getOrNull().orEmpty()
+            }
+            val nextTempoWork = async {
+                if (!enabled || nextSong == null) null else c.mixTempo.cached(nextSong.id) ?:
+                    runCatching { c.mixTempo.measure(nextSong.id, network = mayDownloadAnalysis, edges = false) }.getOrNull()
+            }
+            val nextBestWork = async {
+                if (!enabled || nextSong == null) null else runCatching {
+                    c.bestParts.startMs(nextSong, fetch = !c.dataSaving())
+                }.getOrNull()
+            }
+            Inputs(lyricsWork.await(), tempoWork.await(), nextLyricsWork.await(), nextTempoWork.await(), nextBestWork.await())
+        }
+        // Analysis suspends. Never publish its result if playback, the queue, or the setting moved underneath it.
+        if (player.currentMediaItem?.toSong()?.id != input.songId || autoMixNextSongId() != input.nextSongId || autoMixShadowInput != input) return
+        if ((com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.intelligentAutoMix) != enabled) return
+        val before = c.intelligentAutoMixShadow.decision.value
+        val decision = c.intelligentAutoMixShadow.evaluate(
+            songId = song.id,
+            durationMs = song.durationSec * 1000L,
+            nextSongId = input.nextSongId,
+            bestPartStartMs = input.bestPartStartMs,
+            lyrics = inputs.lyrics,
+            tempo = inputs.tempo,
+            nextDurationMs = (nextSong?.durationSec ?: 0) * 1000L,
+            nextBestPartStartMs = inputs.nextBestPartMs,
+            nextLyrics = inputs.nextLyrics,
+            nextTempo = inputs.nextTempo,
+        )
+        if (decision != before) {
+            val p = decision.plan
+            AudioDiagnostics.log(
+                "automix-shadow",
+                if (p == null) "${song.id}: no safe early transition (${decision.phraseBoundaryCount} usable phrase boundaries, usable beat ${decision.hasUsableBeat}, next ${input.nextSongId != null})"
+                else "${song.id}: ${if (c.settings.current.intelligentAutoMix) "will" else "would"} transition at ${p.transitionAtMs / 1000} s (${p.reason.name.lowercase()}, ${p.boundary.name.lowercase()}) to ${input.nextSongId} from ${p.entryAtMs / 1000} s",
+            )
+        }
     }
 
     /** Podcast episodes' playback speed (the player's ⋯ sets it); music always plays at 1×. */
@@ -888,6 +1030,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         // What's lined up changed (songs added, moved, removed, the queue emptied): kept for the next start. It was only
         // saved on a song change, play / pause, shuffle or repeat, so an emptied or edited queue could come back as it was.
         scheduleSave()
+        // The planner's answer depends on the actual next song; unchanged queue edits are ignored by the scheduler.
+        scheduleAutoMixShadow(c.bestParts.current.value)
         val i = player.nextMediaItemIndex
         val next = if (i == C.INDEX_UNSET) null else player.getMediaItemAt(i).mediaId
         if (next != null && next != warmedNext && player.currentMediaItem != null) prefetchNext()
@@ -947,6 +1091,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         updateButtons()
         // Shuffling picks a different next song.
         prefetchNext()
+        scheduleAutoMixShadow(c.bestParts.current.value, force = true)
         scheduleSave()
     }
 
@@ -954,6 +1099,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         vocals.repeatMode = repeatMode
         edges.repeatMode = repeatMode
         updateButtons()
+        scheduleAutoMixShadow(c.bestParts.current.value, force = true)
         scheduleSave()
     }
 
@@ -1282,12 +1428,12 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         // The waveform progress bar is drawn from the scan too (1.7.4).
         val wave = s.scrubberStyle == com.prism.music.data.prefs.ScrubberStyle.WAVE
         // A radio tuned calm or energetic goes by what's been scanned, so songs heard are scanned for it too.
-        if (!s.mix && !s.normalize && !wave && s.behavior.radioTune.energy == 0f) return
+        if (!s.mix && !(com.prism.music.BuildConfig.AUTOMIX_DJ && s.intelligentAutoMix) && !s.normalize && !wave && s.behavior.radioTune.energy == 0f) return
         val network = s.mixTempoOnCellular || getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered == false
         val songs = items.mapNotNull { it?.toSong() }.filter { !it.isLive && !it.isEpisode }.distinctBy { it.id }
         if (songs.isEmpty()) return
         // Songs scanned before fade-outs and intros were measured are scanned again only for Crossfade's automatic length.
-        val edges = s.mix && s.mixAuto
+        val edges = (s.mix && s.mixAuto) || (com.prism.music.BuildConfig.AUTOMIX_DJ && s.intelligentAutoMix)
         val playing = player.currentMediaItem?.mediaId
         scanJob?.cancel()
         scanJob = scope.launch {
