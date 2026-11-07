@@ -117,6 +117,9 @@ object IntelligentAutoMixPlanner {
         phraseBoundariesMs.filter { it in EARLIEST_ENTRY_MS..latest && abs(it - target) <= ENTRY_WINDOW_MS }
             .distinct().minWithOrNull(compareBy<Long> { abs(it - target) }.thenBy { it })?.let { return it }
 
+        // Without a known highlight, a beat near twenty seconds is not necessarily a bar or phrase start. Preserve the
+        // opening unless a real phrase restart is known instead of cutting into an arbitrary verse.
+        if (best == null) return 0
         val t = tempo?.takeIf(::hasUsableBeat) ?: return 0
         val anchor = listOf(t.firstBeatMs, t.outroBeatMs).minBy { abs(it - target) }
         if (abs(anchor - target) > MAX_BEAT_EXTRAPOLATION_MS) return 0

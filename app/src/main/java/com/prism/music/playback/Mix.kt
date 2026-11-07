@@ -88,9 +88,9 @@ class MixEngine(
         val beats: Boolean,
         /** A beat of the ending song in the next song's time (ms), with beat matching. */
         val beatMs: Double = 0.0,
-        /** The guarded early point that authorized this plan; null for an ordinary end-of-song crossfade. */
+        /** The frozen early point that authorized this plan; null for an ordinary end-of-song crossfade. */
         val earlyStartMs: Long? = null,
-        /** The guarded incoming cue paired with [earlyStartMs]. */
+        /** The frozen incoming cue paired with [earlyStartMs]. */
         val earlyInMs: Long? = null,
     ) {
         /** How many times the blend has been put off to get the tail in step. */
@@ -107,6 +107,8 @@ class MixEngine(
     private var settleFrom = 1f
     private var settleStartedAt = 0L
     private var noPlanFor: String? = null
+    private var retryFor: String? = null
+    private var retryCount = 0
     private var lastSyncLog = 0L
     private var syncActionAt = 0L
     /** While the next song plays a little off tempo to bring its beats in line: when to stop (0 when it isn't). */
@@ -304,10 +306,12 @@ class MixEngine(
         // Reading only MediaMetadata.durationMs made it look unknown here, which discarded AutoMix's incoming cue and
         // then invalidated the prepared plan on every tick.
         val nextDur = knownDurationMs(next) ?: Long.MAX_VALUE
-        val len = minOf(chosenLength(item, next, a, b, length), dur / 3, nextDur / 3)
+        val rawEarly = earlyStart(item, next)
+        val early = usableEarlyStart(rawEarly, main.currentPosition, dur)
+        val requestedLength = if (early != null) earlyBlendLengthMs(a, b) else chosenLength(item, next, a, b, length)
+        val len = minOf(requestedLength, dur / 3, nextDur / 3)
         if (len < 1000 || dur < 30_000) return noBlend(item, "a song too short to blend (${dur / 1000} s, next ${nextDur.takeIf { it != Long.MAX_VALUE }?.let { it / 1000 } ?: "?"} s)")
         val end = (a?.lastSoundMs?.takeIf { it in dur / 2..dur } ?: dur)
-        val early = usableEarlyStart(earlyStart(item, next), main.currentPosition, dur)
         var start = early ?: end - len
         val guardedIn = if (early != null && nextDur != Long.MAX_VALUE) {
             earlyIn(item, next)?.takeIf { it > 0 && it < nextDur - 10_000 }
@@ -317,7 +321,9 @@ class MixEngine(
         var ratio = 1f
         var beats = false
         var beatMs = 0.0
-        if (beatMatch() && a != null && b != null && a.steady && b.steady) {
+        // A mid-song blend always needs its beats aligned when the two measured grids are trustworthy. Otherwise its
+        // dedicated short fade keeps the overlap brief instead of laying two unrelated full-energy sections together.
+        if ((beatMatch() || early != null) && a != null && b != null && a.steady && b.steady) {
             // Tempo compared octave-free: a 170 BPM song against an 85 BPM one already shares a beat.
             val bBpm = listOf(b.bpm, b.bpm * 2, b.bpm / 2).minBy { abs(ln(it / a.bpm)) }
             val r = a.bpm / bBpm
@@ -346,14 +352,12 @@ class MixEngine(
         item.mediaMetadata.durationMs?.takeIf { it > 0 }
             ?: item.toSong()?.durationSec?.takeIf { it > 0 }?.times(1000L)
 
-    /** The queue and guarded decision must still describe exactly the plan that was prepared. */
+    /** The queue must still describe the exact pair that was prepared. Its musical decision is frozen from here. */
     private fun planStillValid(p: Plan): Boolean {
         val from = main.currentMediaItem ?: return false
         if (from.mediaId != p.fromId || p.toIndex !in 0 until main.mediaItemCount) return false
         val to = main.getMediaItemAt(p.toIndex)
-        if (to.mediaId != p.toId) return false
-        return p.earlyStartMs == null ||
-            (earlyStart(from, to) == p.earlyStartMs && earlyIn(from, to) == p.earlyInMs)
+        return to.mediaId == p.toId
     }
 
     /** The tail is getting ready; it starts playing along (muted) just before the blend. */
@@ -616,6 +620,8 @@ class MixEngine(
         phase = Phase.IDLE
         plan = null
         noPlanFor = null
+        retryFor = null
+        retryCount = 0
         onSettled()
     }
 
@@ -629,6 +635,7 @@ class MixEngine(
 
     private fun abort(why: String, retry: Boolean = false): Long {
         val wasOn = phase != Phase.IDLE
+        val failed = plan?.fromId
         if (wasOn) note("blend stopped: $why")
         state.blend.value = null
         state.mark.value = null
@@ -639,7 +646,16 @@ class MixEngine(
         shifter = null
         if (main.volume != 1f) main.volume = 1f
         if (main.playbackParameters.speed != 1f) main.playbackParameters = at(1f)
-        if (!retry && (phase == Phase.PREPARED || phase == Phase.SYNCING)) plan?.let { noPlanFor = it.fromId }
+        if (phase == Phase.PREPARED || phase == Phase.SYNCING) failed?.let { fromId ->
+            if (!retry) noPlanFor = fromId
+            else {
+                if (retryFor == fromId) retryCount++ else { retryFor = fromId; retryCount = 1 }
+                if (retryCount >= MAX_RETRIES_PER_SONG) {
+                    noPlanFor = fromId
+                    note("no more blend retries after $fromId ($retryCount attempts)")
+                }
+            }
+        }
         catchUpUntil = 0L
         phase = Phase.IDLE
         plan = null
@@ -682,6 +698,23 @@ class MixEngine(
                 intro >= AUTO_SHORT_MS -> minOf(intro, AUTO_INTRO_MAX_MS)
                 else -> AUTO_SHORT_MS
             }.coerceIn(AUTO_SHORT_MS, AUTO_MAX_MS)
+        }
+
+        /**
+         * A mid-song transition overlaps two full-energy sections, so it never borrows the songs' ending/intro fade
+         * lengths. With compatible steady tempo grids it lasts a whole number of four-beat bars nearest three seconds;
+         * otherwise it is a short equal-power fade.
+         */
+        fun earlyBlendLengthMs(ending: Tempo?, next: Tempo?): Long {
+            if (ending == null || next == null || !ending.steady || !next.steady || ending.bpm <= 0 || next.bpm <= 0) {
+                return EARLY_PLAIN_MS
+            }
+            val nextBpm = listOf(next.bpm, next.bpm * 2, next.bpm / 2).minBy { abs(ln(it / ending.bpm)) }
+            if (abs(ending.bpm / nextBpm - 1) > MAX_STRETCH || next.firstBeatMs > 4000) return EARLY_PLAIN_MS
+            return (1..4).map { bars -> Math.round(ending.periodMs * 4 * bars) }
+                .filter { it in EARLY_MIN_MS..EARLY_MAX_MS }
+                .minByOrNull { abs(it - EARLY_PLAIN_MS) }
+                ?: EARLY_PLAIN_MS
         }
 
         /**
@@ -735,6 +768,10 @@ class MixEngine(
 
         /** Auto's longest crossfade, as Spotify's slider's. (A fixed length may be longer: MAX_CROSSFADE_SECONDS, #351.) */
         const val AUTO_MAX_MS = 12_000L
+        private const val EARLY_MIN_MS = 2_000L
+        private const val EARLY_MAX_MS = 4_000L
+        private const val EARLY_PLAIN_MS = 3_000L
+        private const val MAX_RETRIES_PER_SONG = 2
         /** A guarded early transition is never accepted before this point in a song. */
         private const val MIN_EARLY_START_MS = 45_000L
         /** DJ mode: songs in keys that sit together blend at least this long (within [AUTO_MAX_MS], which DJ mode plans by). */

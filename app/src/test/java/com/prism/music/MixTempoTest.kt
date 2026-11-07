@@ -139,4 +139,13 @@ class MixTempoTest {
         // Not scanned yet: a middling length.
         assertEquals(6_000L, com.prism.music.playback.MixEngine.autoLengthMs(null, plain))
     }
+
+    @Test
+    fun earlyBlendUsesShortBarAlignedOrSafeFallbackLength() {
+        val steady120 = Tempo(120.0, 5.0, 0, 200_000, 0, 199_500)
+        val steady80 = Tempo(80.0, 5.0, 0, 200_000, 0, 199_500)
+        assertEquals(2_000L, com.prism.music.playback.MixEngine.earlyBlendLengthMs(steady120, steady120))
+        assertEquals(3_000L, com.prism.music.playback.MixEngine.earlyBlendLengthMs(steady80, steady80))
+        assertEquals(3_000L, com.prism.music.playback.MixEngine.earlyBlendLengthMs(null, steady120))
+    }
 }

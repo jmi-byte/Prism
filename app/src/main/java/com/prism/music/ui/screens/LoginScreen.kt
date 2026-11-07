@@ -166,6 +166,9 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit, addAccount: Boolean = fa
                 WebView(ctx).apply {
                     // Fills the box (see DiscordLoginScreen: a WRAP_CONTENT WebView measures viewport units as 0).
                     layoutParams = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+                    // Some Android builds render an embedded Google sign-in as a black hardware surface. This screen is
+                    // short-lived, so Veloura uses the reliable software layer for it.
+                    if (com.prism.music.BuildConfig.AUTOMIX_DJ) setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     // Google blocks sign-in from user agents flagged as embedded web views.

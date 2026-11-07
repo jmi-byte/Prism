@@ -56,7 +56,7 @@ private val VelouraColors = lightColorScheme(
     surfaceVariant = Color(0xFFEAF4FF), onSurface = VelouraNavy, onSurfaceVariant = VelouraMuted,
 )
 
-private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ }
+private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ, ACCOUNT }
 private sealed interface DiscoveryFeed {
     data object Loading : DiscoveryFeed
     data class Ready(val songs: List<Song>) : DiscoveryFeed
@@ -67,6 +67,7 @@ private sealed interface DiscoveryFeed {
 @Composable
 fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
     var tab by remember { mutableStateOf(VelouraTab.HOME) }
+    var showLogin by remember { mutableStateOf(false) }
     val link by deepLink.collectAsState()
     var linkMessage by remember { mutableStateOf<String?>(null) }
 
@@ -79,15 +80,23 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
     }
 
     MaterialTheme(colorScheme = VelouraColors) {
+        if (showLogin) {
+            com.prism.music.ui.screens.LoginScreen(
+                onDone = { showLogin = false; tab = VelouraTab.HOME },
+                onBack = { showLogin = false },
+            )
+            return@MaterialTheme
+        }
         Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
             Scaffold(
                 containerColor = Color.Transparent,
                 topBar = {
                     when (tab) {
-                        VelouraTab.HOME -> BrandHeader(linkMessage)
+                        VelouraTab.HOME -> BrandHeader(linkMessage) { tab = VelouraTab.ACCOUNT }
                         VelouraTab.SEARCH -> PageHeader("Search YouTube Music")
-                        VelouraTab.LIBRARY -> PageHeader("Queue & Transition Plan")
+                        VelouraTab.LIBRARY -> PageHeader("Your Music")
                         VelouraTab.DJ -> PageHeader("Now Playing")
+                        VelouraTab.ACCOUNT -> PageHeader("YouTube Music Account")
                     }
                 },
                 bottomBar = {
@@ -110,8 +119,9 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
                     when (tab) {
                         VelouraTab.HOME -> Discover(c, { tab = VelouraTab.SEARCH }, { tab = VelouraTab.DJ })
                         VelouraTab.SEARCH -> Search(c) { tab = VelouraTab.DJ }
-                        VelouraTab.LIBRARY -> QueuePlan(c) { tab = VelouraTab.DJ }
+                        VelouraTab.LIBRARY -> VelouraLibrary(c, onConnect = { showLogin = true }, onPlayed = { tab = VelouraTab.DJ })
                         VelouraTab.DJ -> NowPlaying(c) { tab = VelouraTab.SEARCH }
+                        VelouraTab.ACCOUNT -> Account(c, onConnect = { showLogin = true }, onBack = { tab = VelouraTab.HOME })
                     }
                 }
             }
@@ -147,7 +157,7 @@ private fun NavItem(
 }
 
 @Composable
-private fun BrandHeader(message: String?) {
+private fun BrandHeader(message: String?, onAccount: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().background(Color(0xFCFFFFFF)).statusBarsPadding()
             .padding(horizontal = 20.dp, vertical = 12.dp),
@@ -158,6 +168,7 @@ private fun BrandHeader(message: String?) {
             Text("Veloura", color = VelouraNavy, fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic, fontSize = 24.sp)
             Text(message ?: "Music that never stops moving", color = VelouraMuted, fontSize = 12.sp, maxLines = 1)
         }
+        IconButton(onClick = onAccount) { Icon(PrismIcons.Person, "YouTube Music account", tint = VelouraNavy) }
     }
 }
 
@@ -185,10 +196,6 @@ private fun BrandMark(size: androidx.compose.ui.unit.Dp) {
 private fun Discover(c: AppContainer, onSearch: () -> Unit, onNowPlaying: () -> Unit) {
     val current by c.player.currentSong.collectAsState()
     val settings by c.settings.flow.collectAsState()
-    val scope = rememberCoroutineScope()
-    var linkText by remember { mutableStateOf("") }
-    var linkError by remember { mutableStateOf<String?>(null) }
-    var openingLink by remember { mutableStateOf(false) }
     val feed by produceState<DiscoveryFeed>(DiscoveryFeed.Loading) {
         value = withContext(Dispatchers.IO) {
             runCatching {
@@ -228,31 +235,14 @@ private fun Discover(c: AppContainer, onSearch: () -> Unit, onNowPlaying: () -> 
                 FeatureTile("For You", PrismIcons.StarFilled, listOf(Color(0xFFFF9A32), Color(0xFFFF6D3A)), Modifier.weight(1f), onSearch)
             }
         }
-        item {
-            Text("YouTube Music link", color = VelouraNavy, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp)
-            Row(Modifier.fillMaxWidth().padding(top = 9.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                OutlinedTextField(
-                    linkText, { linkText = it }, Modifier.weight(1f), singleLine = true,
-                    label = { Text("Paste song link") }, placeholder = { Text("music.youtube.com/…") },
-                )
-                Button(
-                    onClick = {
-                        openingLink = true; linkError = null
-                        scope.launch {
-                            val found = ShareLinks.findIn(linkText)
-                            linkError = if (found == null) "Paste a YouTube or YouTube Music song link" else playYouTubeLink(c, Uri.parse(found))
-                            openingLink = false
-                            if (linkError == null) onNowPlaying()
-                        }
-                    },
-                    enabled = linkText.isNotBlank() && !openingLink,
-                    contentPadding = PaddingValues(horizontal = 17.dp, vertical = 16.dp),
-                ) {
-                    if (openingLink) CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-                    else Icon(PrismIcons.Play, "Open link")
+        if (!settings.isLoggedIn) item {
+            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF6FF)), shape = RoundedCornerShape(20.dp)) {
+                Column(Modifier.fillMaxWidth().padding(18.dp)) {
+                    Text("Connect YouTube Music", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 19.sp)
+                    Text("Bring in your liked songs, playlists and recommendations. Veloura never sees your Google password.", color = VelouraMuted, modifier = Modifier.padding(top = 5.dp))
+                    Text("Open the account button above to connect.", color = VelouraBlue, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
                 }
             }
-            linkError?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp)) }
         }
         item { Text("Trending now", color = VelouraNavy, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp) }
         when (val result = feed) {
@@ -457,6 +447,83 @@ private fun Search(c: AppContainer, onPlayed: () -> Unit) {
                         c.player.playQueue(results, index, QueueSource(QueueKind.OTHER, "Search: $submitted")); onPlayed()
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Account(c: AppContainer, onConnect: () -> Unit, onBack: () -> Unit) {
+    val settings by c.settings.flow.collectAsState()
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        AsyncImage(
+            settings.accountAvatar.takeIf { it.isNotBlank() }, null,
+            Modifier.size(92.dp).clip(CircleShape).background(Color(0xFFDCEEFF)),
+        )
+        Text(
+            if (settings.isLoggedIn) settings.accountName.ifBlank { "YouTube Music connected" } else "Connect YouTube Music",
+            color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 24.sp, modifier = Modifier.padding(top = 18.dp),
+        )
+        if (settings.isLoggedIn) {
+            Text(settings.accountEmail, color = VelouraMuted, modifier = Modifier.padding(top = 5.dp))
+            Card(
+                Modifier.fillMaxWidth().padding(top = 22.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp),
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Text("Your music is linked", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                    Text("Veloura can use your YouTube Music likes, playlists, recommendations and playback session.", color = VelouraMuted, modifier = Modifier.padding(top = 6.dp))
+                    Button({ c.library.syncInBackground() }, Modifier.padding(top = 14.dp)) { Text("Sync library now") }
+                }
+            }
+        } else {
+            Text(
+                "Sign in on Google’s own page. Veloura stores only the resulting YouTube Music session on this phone and never receives your password.",
+                color = VelouraMuted, modifier = Modifier.padding(top = 10.dp),
+            )
+            Button(onConnect, Modifier.fillMaxWidth().padding(top = 22.dp)) { Text("Connect YouTube Music") }
+        }
+        TextButton(onBack, Modifier.padding(top = 10.dp)) { Text("Back to Home") }
+    }
+}
+
+@Composable
+private fun VelouraLibrary(c: AppContainer, onConnect: () -> Unit, onPlayed: () -> Unit) {
+    val settings by c.settings.flow.collectAsState()
+    val liked by c.library.likedShown.collectAsState()
+    if (!settings.isLoggedIn) {
+        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            ActionCard(
+                "Connect your YouTube Music library",
+                "Your liked songs and account library will appear here after you connect.",
+                "Connect YouTube Music",
+                onConnect,
+            )
+        }
+        return
+    }
+    if (liked.isEmpty()) {
+        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            ActionCard("Your liked songs are syncing", "This can take a moment after the first connection.", "Sync now") {
+                c.library.syncInBackground()
+            }
+        }
+        return
+    }
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        item {
+            Text("Liked songs", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 25.sp)
+            Text("${liked.size} songs from YouTube Music", color = VelouraMuted, modifier = Modifier.padding(top = 3.dp, bottom = 8.dp))
+        }
+        itemsIndexed(liked, key = { _, song -> song.id }) { index, song ->
+            SongRow(song, clock(song.durationSec * 1000L)) {
+                c.player.playQueue(liked, index, QueueSource(QueueKind.LIBRARY, "Liked songs")); onPlayed()
             }
         }
     }

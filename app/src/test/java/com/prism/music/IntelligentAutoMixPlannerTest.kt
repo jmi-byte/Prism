@@ -211,9 +211,9 @@ class IntelligentAutoMixPlannerTest {
     }
 
     @Test
-    fun incomingSongUsesAMeasuredBeatWhenTheHighlightIsUnknown() {
+    fun incomingSongKeepsItsOpeningWhenOnlyABeatIsKnown() {
         assertEquals(
-            20_000L,
+            0L,
             IntelligentAutoMixPlanner.entryPoint(240_000, null, tempo = tempo(firstBeatMs = 0, outroBeatMs = 180_000)),
         )
     }

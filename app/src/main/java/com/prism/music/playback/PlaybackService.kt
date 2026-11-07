@@ -494,6 +494,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         val from = player.currentMediaItem ?: return false
         val toIndex = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET && it != player.currentMediaItemIndex } ?: return false
         val to = player.getMediaItemAt(toIndex)
+        if (!mayBlend(from, to)) return false
         val entry = intelligentAutoMixEntry(from, to) ?: return false
         if (::mix.isInitialized) mix.stopBlend()
         AudioDiagnostics.log("automix", "Next ${from.mediaId} -> ${to.mediaId} at ${entry / 1000} s")
@@ -768,10 +769,13 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
 
     /** The actual next window, including repeat-all; repeat-one has no distinct next song to mix into. */
     private fun autoMixNextSongId(): String? {
+        if (player.repeatMode == Player.REPEAT_MODE_ONE) return null
         val i = player.nextMediaItemIndex
         if (i == C.INDEX_UNSET || i == player.currentMediaItemIndex) return null
         val item = player.getMediaItemAt(i)
-        return (item.toSong()?.id ?: item.mediaId).takeIf { it.isNotBlank() }
+        val song = item.toSong() ?: return null
+        if (song.isEpisode || song.isLive || item.videoModeId != null) return null
+        return song.id.takeIf { it.isNotBlank() }
     }
 
     private fun autoMixNextSong(): com.prism.music.data.model.Song? {
@@ -821,7 +825,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             }
             val nextLyricsWork = async {
                 if (!enabled || nextSong == null) emptyList() else
-                    runCatching { c.lyrics.best(nextSong, fetch = true)?.takeIf { it.synced }?.lines }.getOrNull().orEmpty()
+                    runCatching { c.lyrics.best(nextSong, fetch = !c.dataSaving())?.takeIf { it.synced }?.lines }.getOrNull().orEmpty()
             }
             val nextTempoWork = async {
                 if (!enabled || nextSong == null) null else c.mixTempo.cached(nextSong.id) ?:
