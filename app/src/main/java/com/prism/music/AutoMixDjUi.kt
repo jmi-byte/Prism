@@ -92,7 +92,8 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
                 },
                 bottomBar = {
                     Row(
-                        Modifier.fillMaxWidth().background(Color.White).padding(horizontal = 8.dp, vertical = 7.dp),
+                        Modifier.fillMaxWidth().background(Color.White).navigationBarsPadding()
+                            .padding(horizontal = 8.dp, vertical = 7.dp),
                     ) {
                         NavItem(tab == VelouraTab.HOME, "Home", PrismIcons.Home, Modifier.weight(1f)) { tab = VelouraTab.HOME }
                         NavItem(tab == VelouraTab.SEARCH, "Search", PrismIcons.Search, Modifier.weight(1f)) { tab = VelouraTab.SEARCH }
@@ -148,7 +149,8 @@ private fun NavItem(
 @Composable
 private fun BrandHeader(message: String?) {
     Row(
-        Modifier.fillMaxWidth().background(Color(0xFCFFFFFF)).padding(horizontal = 20.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().background(Color(0xFCFFFFFF)).statusBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BrandMark(44.dp)
@@ -162,7 +164,8 @@ private fun BrandHeader(message: String?) {
 @Composable
 private fun PageHeader(title: String) {
     Row(
-        Modifier.fillMaxWidth().background(Color(0xFCFFFFFF)).padding(horizontal = 20.dp, vertical = 16.dp),
+        Modifier.fillMaxWidth().background(Color(0xFCFFFFFF)).statusBarsPadding()
+            .padding(horizontal = 20.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BrandMark(30.dp)
