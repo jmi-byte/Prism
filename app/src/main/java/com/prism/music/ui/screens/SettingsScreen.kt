@@ -116,7 +116,7 @@ import kotlin.math.roundToInt
  * lists the look pages. Keys stay as they were, so links to a page (the tour, the player's ⋯, prism:// links) still work.
  */
 enum class SettingsSection(val key: String, val title: String, val icon: ImageVector) {
-    APPEARANCE("appearance", tr(R.string.customize_prism), PrismIcons.Palette),
+    APPEARANCE("appearance", if (com.prism.music.BuildConfig.AUTOMIX_DJ) "Customize Veloura" else tr(R.string.customize_prism), PrismIcons.Palette),
     SOUND("sound", tr(R.string.playback_sound), PrismIcons.Equalizer),
     LYRICS("lyrics", tr(R.string.lyrics_sing), PrismIcons.Lyrics),
     CONTROLS("controls", tr(R.string.controls_gestures), PrismIcons.Touch),
@@ -407,7 +407,7 @@ private fun SettingsPage(
                         Icon(PrismIcons.OpenInNew, tr(R.string.open_on_github), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Item(tr(R.string.your_data_stays_here), tr(R.string.prism_has_no_server), info = tr(R.string.your_history_replay_and_settings_live), onClick = {})
-                    CheckForUpdates()
+                    if (!com.prism.music.BuildConfig.AUTOMIX_DJ) CheckForUpdates()
                     Item(tr(R.string.take_the_tour), tr(R.string.a_minute_s_walk_through_prism), onClick = { c.tourRequests.tryEmit(Unit) }) { Chevron() }
                     Item(tr(R.string.open_source_licenses), tr(R.string.gpl_3_0_or_later_and), onClick = { nav.go(Routes.settings(SettingsSection.LICENSES.key)) }) { Chevron() }
                     // Debug builds only, so it's left out of Settings search (named title: SettingsIndexTest skips it).
@@ -647,12 +647,14 @@ private fun AccountCard() {
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                profile?.name ?: tr(R.string.make_a_prism_account),
+                profile?.name ?: if (com.prism.music.BuildConfig.AUTOMIX_DJ) "Create your Veloura profile" else tr(R.string.make_a_prism_account),
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium), color = ink,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             Text(
-                if (profile != null) tr(R.string.prism_account_on_this_phone) else tr(R.string.your_name_and_picture_kept_on),
+                if (profile != null && com.prism.music.BuildConfig.AUTOMIX_DJ) "Veloura profile on this phone"
+                else if (profile != null) tr(R.string.prism_account_on_this_phone)
+                else tr(R.string.your_name_and_picture_kept_on),
                 style = MaterialTheme.typography.bodySmall, color = ink.copy(alpha = 0.75f),
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
             )

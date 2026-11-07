@@ -208,8 +208,7 @@ open class MainActivity : ComponentActivity() {
         deepLink.value = if (fresh) linkIn(intent) else null
         if (intent.action != Intent.ACTION_MAIN) setIntent(Intent(this, javaClass).setAction(Intent.ACTION_MAIN))
         setContent {
-            if (BuildConfig.AUTOMIX_DJ) AutoMixDjRoot(c, deepLink)
-            else CompositionLocalProvider(
+            CompositionLocalProvider(
                     LocalContainer provides c,
                     com.prism.music.ui.player.LocalPip provides inPip.value,
                     com.prism.music.ui.theme.LocalWindowLayout provides com.prism.music.ui.theme.rememberWindowLayout(),
@@ -363,6 +362,7 @@ private fun NavTab.tab(name: String? = null): Tab {
         NavTab.DOWNLOADS -> Tab(Routes.DOWNLOADS, label, PrismIcons.Download, PrismIcons.DownloadDone)
         NavTab.LIKED -> Tab(Routes.liked(), label, PrismIcons.Heart, PrismIcons.HeartFilled)
         NavTab.PODCASTS -> Tab(Routes.PODCASTS, label, PrismIcons.Podcasts, PrismIcons.Podcasts)
+        NavTab.DJ -> Tab(Routes.DJ, label, PrismIcons.Turntable, PrismIcons.Turntable)
     }
 }
 
@@ -510,7 +510,12 @@ private fun PrismRoot(deepLink: MutableStateFlow<Uri?>) {
         val onboardingPicker = (route?.startsWith(Routes.PICK_ARTISTS) == true || route?.startsWith(Routes.ACCOUNT) == true) &&
             backStack?.arguments?.getBoolean("onboarding") == true
         val showChrome = route != Routes.LOGIN && route != Routes.LOGIN_ADD && route != Routes.DISCORD_LOGIN && route != Routes.WELCOME && !onboardingPicker
-        val tabs = settings.navTabs.map { it.tab(settings.tabNames[it]) }
+        // Veloura keeps Prism's complete app and gives AutoMix a first-class fourth tab. The previous prototype
+        // replaced this whole navigation graph, hiding account sign-in, the real Library and Settings.
+        val tabChoices = if (BuildConfig.AUTOMIX_DJ) {
+            listOf(NavTab.HOME, NavTab.SEARCH, NavTab.LIBRARY, NavTab.DJ)
+        } else settings.navTabs
+        val tabs = tabChoices.map { it.tab(settings.tabNames[it]) }
 
         val together by c.together.state.collectAsState()
         val inSession = together is com.prism.music.playback.together.TogetherState.Hosting || together is com.prism.music.playback.together.TogetherState.Guest
@@ -530,7 +535,9 @@ private fun PrismRoot(deepLink: MutableStateFlow<Uri?>) {
 
         // Decided once: the tab Prism opens on is the root every other tab sits on, and the welcome
         // screen is a real destination, so signing in from it navigates inside a graph that already exists.
-        val root = remember { (settings.startTab.takeIf { it in settings.navTabs } ?: settings.navTabs.first()).tab().route }
+        val root = remember(tabChoices) {
+            (settings.startTab.takeIf { it in tabChoices } ?: tabChoices.first()).tab().route
+        }
         val start = remember { if (!settings.onboarded && !settings.isLoggedIn) Routes.WELCOME else root }
         val goRoot: () -> Unit = {
             navController.navigate(root) {
@@ -717,6 +724,9 @@ private fun PrismRoot(deepLink: MutableStateFlow<Uri?>) {
                         composable(Routes.HOME) { ScreenBackdrop(BackdropScreen.HOME) { HomeScreen(bottomPadding) } }
                         composable(Routes.SEARCH) { ScreenBackdrop(BackdropScreen.SEARCH) { SearchScreen(bottomPadding) } }
                         composable(Routes.LIBRARY) { ScreenBackdrop(BackdropScreen.LIBRARY) { LibraryScreen(bottomPadding) } }
+                        composable(Routes.DJ) {
+                            com.prism.music.VelouraDjScreen(c, bottomPadding) { navController.navigate(Routes.SEARCH) }
+                        }
                         composable(Routes.REPLAY) { ScreenBackdrop(BackdropScreen.REPLAY) { ReplayScreen(bottomPadding) } }
                         composable(Routes.SETTINGS) { ScreenBackdrop(BackdropScreen.SETTINGS) { SettingsScreen(bottomPadding) } }
                         composable(

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Prism</string>
+    <string name="dj">DJ</string>
     <string name="tile_recognize">Recognize song</string>
     <string name="tile_play">Prism</string>
     <string name="downloads">Downloads</string>

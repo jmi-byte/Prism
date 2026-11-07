@@ -463,6 +463,27 @@ private const val GREY_COVER_SATURATION = 0.15f
 /** The least of a cover's swatched pixels a swatch needs to be its accent (see [pickSwatch]). */
 private const val MIN_SWATCH_SHARE = 0.02f
 
+/** Veloura's blue-and-white identity, while retaining Prism's complete and user-customisable UI. */
+private fun velouraScheme(dark: Boolean): ColorScheme = if (dark) {
+    darkColorScheme(
+        primary = Color(0xFF69B4FF), onPrimary = Color(0xFF001C38),
+        primaryContainer = Color(0xFF073D73), onPrimaryContainer = Color(0xFFD7EAFF),
+        secondary = Color(0xFF21D4E8), tertiary = Color(0xFFFF9A4D),
+        background = Color(0xFF071426), onBackground = Color(0xFFEAF3FF),
+        surface = Color(0xFF0C1C31), onSurface = Color(0xFFEAF3FF),
+        surfaceVariant = Color(0xFF18304D), onSurfaceVariant = Color(0xFFB8C9DE),
+    )
+} else {
+    lightColorScheme(
+        primary = Color(0xFF087DFF), onPrimary = Color.White,
+        primaryContainer = Color(0xFFDCEEFF), onPrimaryContainer = Color(0xFF071E41),
+        secondary = Color(0xFF12CFE4), tertiary = Color(0xFFFF8A34),
+        background = Color(0xFFF4F9FF), onBackground = Color(0xFF071E41),
+        surface = Color.White, onSurface = Color(0xFF071E41),
+        surfaceVariant = Color(0xFFEAF4FF), onSurfaceVariant = Color(0xFF63758B),
+    )
+}
+
 @Composable
 fun PrismTheme(settings: AppSettings, artworkColor: Color?, content: @Composable () -> Unit) {
     val dark = isAppDark(settings)
@@ -485,7 +506,7 @@ fun PrismTheme(settings: AppSettings, artworkColor: Color?, content: @Composable
     val seed by animateColorAsState(seedTarget, tween(if (settings.colorSource == ColorSource.ARTWORK) settings.artworkChange.ms else 900), label = "seed")
     val dynamic = dynamicSchemes(settings, context)
     val colors = remember(settings, seed, dark) { themeColors(settings, dark, seed, dynamic) }
-    val scheme = colors.scheme
+    val scheme = if (com.prism.music.BuildConfig.AUTOMIX_DJ) velouraScheme(dark) else colors.scheme
     val whiteAccent = colors.whiteAccent
     if (PrismTokens.whiteAccent?.now != whiteAccent?.now || (PrismTokens.whiteAccent == null) != (whiteAccent == null)) PrismTokens.whiteAccent = whiteAccent
 

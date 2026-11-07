@@ -318,6 +318,28 @@ private fun ActionCard(title: String, detail: String, action: String, onClick: (
     }
 }
 
+/**
+ * Veloura's DJ workspace inside Prism's complete navigation graph. Home, Search, Library, account connection,
+ * settings, lyrics and the full player remain Prism's real screens; this is an additional AutoMix destination.
+ */
+@Composable
+fun VelouraDjScreen(c: AppContainer, bottomPadding: androidx.compose.ui.unit.Dp, onFindMusic: () -> Unit) {
+    var plan by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().background(VelouraBackground)) {
+        PageHeader(if (plan) "Queue & Transition Plan" else "Intelligent AutoMix")
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp)
+                .clip(RoundedCornerShape(24.dp)).background(Color(0xFFE9F2FE)).padding(4.dp),
+        ) {
+            SegmentButton("Now Playing", !plan, Modifier.weight(1f)) { plan = false }
+            SegmentButton("AutoMix Plan", plan, Modifier.weight(1f)) { plan = true }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = bottomPadding)) {
+            if (plan) QueuePlan(c) { plan = false } else NowPlaying(c, onFindMusic)
+        }
+    }
+}
+
 @Composable
 private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
     val song by c.player.currentSong.collectAsState()
@@ -340,7 +362,7 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
 
     if (song == null) {
         Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            ActionCard("Choose music to start AutoMix", "Search YouTube Music or paste a YouTube link. The player and transition plan will populate automatically.", "Find music", onFindMusic)
+            ActionCard("Choose music to start AutoMix", "Pick music from your personalised Home, Search or Library. The player and transition plan will populate automatically.", "Find music", onFindMusic)
         }
         return
     }
@@ -470,7 +492,7 @@ private fun QueuePlan(c: AppContainer, onPicked: () -> Unit) {
             Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp)) {
                 Column(Modifier.padding(18.dp)) {
                     Text("Your queue is empty", color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Text("Choose a song from Discover or Search. Veloura will build the transition plan here.", color = VelouraMuted, modifier = Modifier.padding(top = 6.dp))
+                    Text("Choose a song from Home, Search or Library. Veloura will build the transition plan here.", color = VelouraMuted, modifier = Modifier.padding(top = 6.dp))
                 }
             }
         }

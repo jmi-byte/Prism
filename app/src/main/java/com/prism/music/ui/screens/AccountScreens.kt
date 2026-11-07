@@ -176,14 +176,18 @@ fun PrismAccountScreen(onboarding: Boolean, bottomPadding: Dp, onDone: () -> Uni
             pendingAvatar?.let { c.account.setAvatar(it.id) }
             pendingPicture = null
             pendingAvatar = null
-            if (made) Toast.makeText(context, tr(R.string.your_prism_account_is_ready), Toast.LENGTH_SHORT).show()
+            if (made) Toast.makeText(
+                context,
+                if (com.prism.music.BuildConfig.AUTOMIX_DJ) "Your Veloura profile is ready" else tr(R.string.your_prism_account_is_ready),
+                Toast.LENGTH_SHORT,
+            ).show()
             if (made || onboarding) onDone()
         }
     }
 
     if (removing) AlertDialog(
         onDismissRequest = { removing = false },
-        title = { Text(tr(R.string.remove_your_prism_account)) },
+        title = { Text(if (com.prism.music.BuildConfig.AUTOMIX_DJ) "Remove your Veloura profile?" else tr(R.string.remove_your_prism_account)) },
         text = { Text(tr(R.string.only_your_name_and_picture_go)) },
         confirmButton = { PrismTextButton({ removing = false; c.account.delete(); onDone() }) { Text(tr(R.string.remove)) } },
         dismissButton = { PrismTextButton({ removing = false }) { Text(tr(R.string.keep_it)) } },
@@ -200,11 +204,14 @@ fun PrismAccountScreen(onboarding: Boolean, bottomPadding: Dp, onDone: () -> Uni
         Column(Modifier.widthIn(max = 480.dp).fillMaxWidth().padding(horizontal = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(if (onboarding) 48.dp else 8.dp))
             Text(
-                if (profile == null) tr(R.string.your_prism_account) else profile!!.name,
+                if (profile == null && com.prism.music.BuildConfig.AUTOMIX_DJ) "Your Veloura profile"
+                else if (profile == null) tr(R.string.your_prism_account)
+                else profile!!.name,
                 style = com.prism.music.ui.components.pageTitleStyle(), textAlign = TextAlign.Center,
             )
             Text(
-                tr(R.string.who_you_are_in_prism_kept),
+                if (com.prism.music.BuildConfig.AUTOMIX_DJ) "Who you are in Veloura, kept on this phone and in your backups. No email, no password, no server."
+                else tr(R.string.who_you_are_in_prism_kept),
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp),
             )
@@ -253,7 +260,11 @@ fun PrismAccountScreen(onboarding: Boolean, bottomPadding: Dp, onDone: () -> Uni
             Spacer(Modifier.height(22.dp))
             val changed = profile == null || name.trim() != profile?.name
             PrismButton({ save() }, Modifier.fillMaxWidth().heightIn(min = 52.dp), enabled = changed || pendingPicture != null || pendingAvatar != null) {
-                Text(if (profile == null) tr(R.string.make_my_account) else tr(R.string.save))
+                Text(
+                    if (profile == null && com.prism.music.BuildConfig.AUTOMIX_DJ) "Create my profile"
+                    else if (profile == null) tr(R.string.make_my_account)
+                    else tr(R.string.save),
+                )
             }
             if (onboarding) PrismTextButton(onDone, Modifier.fillMaxWidth().padding(top = 4.dp)) { Text(tr(R.string.skip_for_now)) }
 

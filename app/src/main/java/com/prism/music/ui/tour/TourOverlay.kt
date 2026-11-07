@@ -150,6 +150,8 @@ private fun Opening(plan: TourPlan) {
     val (title, body) = when {
         !plan.full -> tr(R.string.what_s_new_in_prism, BuildConfig.VERSION_NAME) to
             trp(R.plurals.n_things_to_know, plan.steps.size)
+        plan.freshInstall && BuildConfig.AUTOMIX_DJ -> "Welcome to Veloura" to
+            "Your music, mixed intelligently. Here’s a minute’s tour of what it can do: swipe, or tap Start."
         plan.freshInstall -> tr(R.string.welcome_to_prism) to tr(R.string.your_music_refracted_here_s_a)
         else -> tr(R.string.welcome_to_the_new_prism) to tr(R.string.prism_is_redrawn_from_the_ground, BuildConfig.VERSION_NAME)
     }

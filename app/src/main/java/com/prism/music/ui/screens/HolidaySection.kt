@@ -71,7 +71,11 @@ fun HolidaySection(cfg: HomeSectionConfig) {
     LaunchedEffect(mixes) { c.seasonal.makeAhead(mixes) }
     var menu by remember { mutableStateOf<HolidayMix?>(null) }
     menu?.let { m -> HolidayMixSheet(m) { menu = null } }
-    SectionHeader(cfg.titled(tr(holiday.section)), Modifier.testTag("holidaySection"), strapline = tr(R.string.holiday_mixes_strapline))
+    SectionHeader(
+        cfg.titled(tr(holiday.section)),
+        Modifier.testTag("holidaySection"),
+        strapline = if (com.prism.music.BuildConfig.AUTOMIX_DJ) "Mixes for the season, made by Veloura" else tr(R.string.holiday_mixes_strapline),
+    )
     if (cfg.style != SectionStyle.CAROUSEL) {
         StyledEntries(cfg.style, mixes.map { m ->
             HomeEntry(m.id, tr(m.name), tr(m.blurb), art = { mod -> HolidayCover(m, mod, showTitle = false) }, onLongClick = { menu = m }) { nav.go(Routes.mix(m.id)) }

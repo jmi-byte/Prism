@@ -445,8 +445,11 @@ fun WelcomeScreen(onSignIn: () -> Unit, onAccount: () -> Unit, onSkip: () -> Uni
             Modifier.fillMaxWidth().verticalScroll(scroll).heightIn(min = maxHeight).padding(28.dp).testTag("welcome"),
             verticalArrangement = Arrangement.Bottom,
         ) {
-            Text(tr(R.string.app_name), color = Color.White, style = MaterialTheme.typography.displayLarge)
-            Text(tr(R.string.your_music_refracted), color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.titleLarge)
+            Text(if (com.prism.music.BuildConfig.AUTOMIX_DJ) "Veloura" else tr(R.string.app_name), color = Color.White, style = MaterialTheme.typography.displayLarge)
+            Text(
+                if (com.prism.music.BuildConfig.AUTOMIX_DJ) "Music that never stops moving" else tr(R.string.your_music_refracted),
+                color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.titleLarge,
+            )
             Spacer(Modifier.height(28.dp))
             Feature(PrismIcons.Lyrics, tr(R.string.karaoke_lyrics_word_by_word_from))
             Feature(PrismIcons.Mic, tr(R.string.sing_the_song_with_its_voice))
@@ -457,7 +460,10 @@ fun WelcomeScreen(onSignIn: () -> Unit, onAccount: () -> Unit, onSkip: () -> Uni
             Spacer(Modifier.height(32.dp))
             // A Prism Account first: it's all on this phone, no sign-in anywhere. Google's for the YouTube Music library.
             PrismButton(onClick = onAccount, Modifier.fillMaxWidth().heightIn(min = 56.dp), shape = RoundedCornerShape(18.dp)) {
-                Text(tr(R.string.make_a_prism_account), style = MaterialTheme.typography.titleMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                Text(
+                    if (com.prism.music.BuildConfig.AUTOMIX_DJ) "Create a profile on this phone" else tr(R.string.make_a_prism_account),
+                    style = MaterialTheme.typography.titleMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
             }
             Text(
                 tr(R.string.kept_on_this_phone_no_email),

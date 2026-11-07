@@ -354,7 +354,7 @@ fun HomeScreen(bottomPadding: androidx.compose.ui.unit.Dp) {
     ) {
         LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = bottomPadding + 16.dp)) {
             item { HomeTopBar() }
-            item(key = "update") { UpdateBanner() }
+            if (!com.prism.music.BuildConfig.AUTOMIX_DJ) item(key = "update") { UpdateBanner() }
             item(key = "performance") { PerformanceOffer() }
             item(key = "smartDownloads") { SmartDownloadsOffer() }
             if (!online) item(key = "offline") { OfflineNote() }
@@ -483,7 +483,10 @@ private fun PerformanceOffer() {
             Icon(PrismIcons.Speed, null, tint = MaterialTheme.colorScheme.onSurface)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(tr(R.string.make_prism_lighter_on_this_phone), style = MaterialTheme.typography.titleSmall)
+                Text(
+                    if (com.prism.music.BuildConfig.AUTOMIX_DJ) "Make Veloura lighter on this phone?" else tr(R.string.make_prism_lighter_on_this_phone),
+                    style = MaterialTheme.typography.titleSmall,
+                )
                 Text(
                     tr(R.string.performance_mode_pauses_blur_moving_backgrounds),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -626,13 +629,34 @@ private fun HomeTopRow(greeting: String, today: String, showGreeting: Boolean) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (showGreeting) Column(Modifier.weight(1f)) {
-            com.prism.music.ui.components.Eyebrow(today)
-            Text(greeting, style = com.prism.music.ui.components.pageTitleStyle(), maxLines = 2)
             val profile by LocalContainer.current.account.profile.collectAsState()
             val name = profile?.name ?: settings.accountName
-            if (settings.greetingShowName && name.isNotBlank()) Text(
-                name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (com.prism.music.BuildConfig.AUTOMIX_DJ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        androidx.compose.ui.res.painterResource(R.drawable.ic_veloura_crossfade_v),
+                        "Veloura",
+                        Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)),
+                        tint = Color.Unspecified,
+                    )
+                    Column(Modifier.padding(start = 11.dp)) {
+                        Text("Veloura", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
+                        Text("Music that never stops moving", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Text(
+                    listOfNotNull(greeting, name.takeIf { settings.greetingShowName && it.isNotBlank() }).joinToString(", "),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            } else {
+                com.prism.music.ui.components.Eyebrow(today)
+                Text(greeting, style = com.prism.music.ui.components.pageTitleStyle(), maxLines = 2)
+                if (settings.greetingShowName && name.isNotBlank()) Text(
+                    name, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             // Settings, Home screen, Continue line hides it.
             if (settings.homeContinue) ContextLine()
         } else Spacer(Modifier.weight(1f))
