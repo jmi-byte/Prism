@@ -4,6 +4,8 @@ import android.net.Uri
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,6 +37,7 @@ import com.prism.music.data.model.SongItem
 import com.prism.music.playback.QueueKind
 import com.prism.music.playback.QueueSource
 import com.prism.music.ui.theme.PrismIcons
+import com.prism.music.ui.components.recordInto
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
@@ -52,6 +55,9 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
     // Where Now Playing's ⌄ goes back to.
     var lastTab by remember { mutableStateOf(VelouraTab.HOME) }
     var showLogin by remember { mutableStateOf(false) }
+    // "Arrange as a set" and "Share this moment", over whichever page asked.
+    var setDialog by remember { mutableStateOf(false) }
+    var storyDialog by remember { mutableStateOf(false) }
     // Kept while the app is open, so switching tabs doesn't download Home's playlists and the library again.
     val libraryCache = remember { LibraryCache() }
     val link by deepLink.collectAsState()
@@ -82,17 +88,24 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
             return@MaterialTheme
         }
         val mixMenu = listOf("Mix settings" to { go(VelouraTab.SETTINGS) })
+        if (setDialog) SetDialog(c) { setDialog = false }
+        if (storyDialog) StoryDialog(c) { storyDialog = false }
         when (tab) {
             // The player and its plan fill the screen, as in the design.
             VelouraTab.DJ -> Surface(Modifier.fillMaxSize(), color = Color.White) {
                 NowPlayingScreen(
                     c, onCollapse = { go(lastTab) },
-                    menu = listOf("More like this" to { go(VelouraTab.SIMILAR) }, "Queue & Transition Plan" to { go(VelouraTab.QUEUE) }) + mixMenu,
+                    menu = listOf(
+                        "More like this" to { go(VelouraTab.SIMILAR) },
+                        "Share this moment" to { storyDialog = true },
+                        "Arrange queue as a set" to { setDialog = true },
+                        "Queue & Transition Plan" to { go(VelouraTab.QUEUE) },
+                    ) + mixMenu,
                     onFindMusic = { go(VelouraTab.SEARCH) },
                 )
             }
             VelouraTab.QUEUE -> Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
-                QueueScreen(c, onBack = { go(VelouraTab.DJ) }, menu = mixMenu)
+                QueueScreen(c, onBack = { go(VelouraTab.DJ) }, menu = listOf("Arrange queue as a set" to { setDialog = true }) + mixMenu)
             }
             VelouraTab.SIMILAR -> Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
                 SimilarScreen(c, onBack = { go(VelouraTab.DJ) })
@@ -329,6 +342,32 @@ private fun NowPlayingScreen(c: AppContainer, onCollapse: () -> Unit, menu: List
         onRepeat = { c.player.cycleRepeat() },
         showLyrics = showLyrics,
         onLyrics = { showLyrics = !showLyrics },
+        lyricsOptions = {
+            // Lyrics in Gurmukhi or Devanagari: in Latin letters (under each line, or instead), and their English meaning.
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val roman = settings.romanize
+                FilterChip(
+                    roman != com.prism.music.data.prefs.RomanizeMode.OFF,
+                    {
+                        c.settings.setRomanize(when (roman) {
+                            com.prism.music.data.prefs.RomanizeMode.OFF -> com.prism.music.data.prefs.RomanizeMode.UNDER
+                            com.prism.music.data.prefs.RomanizeMode.UNDER -> com.prism.music.data.prefs.RomanizeMode.INSTEAD
+                            com.prism.music.data.prefs.RomanizeMode.INSTEAD -> com.prism.music.data.prefs.RomanizeMode.OFF
+                        })
+                    },
+                    { Text(when (roman) {
+                        com.prism.music.data.prefs.RomanizeMode.OFF -> "Romanised: off"
+                        com.prism.music.data.prefs.RomanizeMode.UNDER -> "Romanised: under"
+                        com.prism.music.data.prefs.RomanizeMode.INSTEAD -> "Romanised: instead"
+                    }) },
+                )
+                val english = settings.lyricsTranslate && settings.lyricsTranslateTo.ifBlank { "en" } == "en"
+                FilterChip(english, {
+                    if (english) c.settings.setLyricsTranslate(false)
+                    else { c.settings.setLyricsTranslateTo("en"); c.settings.setLyricsTranslate(true) }
+                }, { Text("English meaning") })
+            }
+        },
         lyrics = { modifier ->
             // Prism's own lyrics panel (word-by-word karaoke), with the listener's lyrics settings.
             val lyricsState = com.prism.music.ui.player.rememberLyricsState(s, opened = showLyrics)
@@ -447,6 +486,116 @@ private fun applyReorder(c: AppContainer, before: List<QueueSongUi>, after: List
     }
 }
 
+/**
+ * Orders the songs after the one playing into a set of [shape]: each is quick-scanned for its key, tempo and loudness
+ * (as Data saver and "Measure songs on mobile data" allow), [EnergySets] orders them, and the queue is moved to match.
+ * Shuffle is switched off first (the set is the order). Says what it did.
+ */
+private suspend fun arrangeAsSet(c: AppContainer, shape: SetShape, onProgress: (Int, Int) -> Unit): String {
+    if (c.player.shuffle.value) { c.player.toggleShuffle(); delay(500) }
+    val queue = c.player.queue.value
+    val current = c.player.currentIndex.value
+    val playing = queue.getOrNull(current) ?: return "Play something first"
+    val upcoming = queue.drop(current + 1).filter { !it.song.isEpisode && !it.song.isLive }.take(60)
+    if (upcoming.size < 2) return "Add a few more songs to the queue first"
+    val net = !c.dataSaving() && (c.settings.current.mixTempoOnCellular || !c.network.metered.value)
+    val all = listOf(playing) + upcoming
+    all.forEachIndexed { i, e ->
+        onProgress(i, all.size)
+        runCatching { c.mixTempo.quickScan(e.song.id, net) }
+    }
+    fun track(e: com.prism.music.playback.QueueEntry) = com.prism.music.playback.DjTrack(
+        e.uid, c.mixTempo.key(e.song.id), c.mixTempo.djBpm(e.song.id), c.mixTempo.djLoudness(e.song.id), e.song.primaryArtist,
+    )
+    val order = EnergySets.arrange(track(playing), upcoming.map(::track), shape).map { it.id }
+    // Moved one at a time into place after the playing song, tracking where each row is as they move.
+    val rows = c.player.queue.value.map { it.uid }.toMutableList()
+    order.forEachIndexed { k, uid ->
+        val from = rows.indexOf(uid)
+        val to = current + 1 + k
+        if (from >= 0 && from != to) {
+            c.player.move(from, to)
+            rows.add(to, rows.removeAt(from))
+        }
+    }
+    val measured = all.count { c.mixTempo.djLoudness(it.song.id) != null }
+    return "Arranged as a set: ${shape.label}" + if (measured < all.size / 2) " (only $measured of ${all.size} songs could be measured; connect to Wi-Fi for a better set)" else ""
+}
+
+@Composable
+private fun SetDialog(c: AppContainer, onClose: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var working by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    AlertDialog(
+        onDismissRequest = { if (working == null) onClose() },
+        title = { Text("Arrange queue as a set") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                val w = working
+                if (w != null) {
+                    Text("Measuring songs… ${w.first}/${w.second}", color = VelouraNavy)
+                    LinearProgressIndicator({ w.first.toFloat() / w.second.coerceAtLeast(1) }, Modifier.fillMaxWidth().padding(top = 10.dp))
+                } else {
+                    Text("The songs after this one, ordered by energy and key. AutoMix blends each step.", color = VelouraMuted, fontSize = 13.sp)
+                    SetShape.entries.forEach { shape ->
+                        Column(
+                            Modifier.fillMaxWidth().padding(top = 10.dp).clip(RoundedCornerShape(14.dp)).border(1.dp, VelouraLine, RoundedCornerShape(14.dp))
+                                .clickable {
+                                    working = 0 to 1
+                                    scope.launch {
+                                        val said = arrangeAsSet(c, shape) { i, n -> working = i to n }
+                                        android.widget.Toast.makeText(context, said, android.widget.Toast.LENGTH_LONG).show()
+                                        working = null
+                                        onClose()
+                                    }
+                                }.padding(12.dp),
+                        ) {
+                            Text(shape.label, color = VelouraNavy, fontWeight = FontWeight.Bold)
+                            Text(shape.detail, color = VelouraMuted, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { if (working == null) TextButton(onClose) { Text("Cancel") } },
+    )
+}
+
+/** "Share this moment": the story card, and Share. */
+@Composable
+private fun StoryDialog(c: AppContainer, onClose: () -> Unit) {
+    val song = c.player.currentSong.collectAsState().value
+    if (song == null) { onClose(); return }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    val layer = androidx.compose.ui.graphics.rememberGraphicsLayer()
+    val lyricsState = com.prism.music.ui.player.rememberLyricsState(song)
+    // The line being sung now (a sung line, not an instrumental gap); none without timed lyrics.
+    val at = remember(song.id) { c.player.position }
+    val line = lyricsState.lines.filter { it.timeMs >= 0 && !it.isGap && it.text.isNotBlank() }.lastOrNull { it.timeMs <= at }?.text
+    androidx.compose.ui.window.Dialog(onClose) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            VelouraStoryCard(
+                song.title, song.artistText, song.thumbnail, line,
+                Modifier.width(270.dp).recordInto(layer),
+            )
+            Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClose, colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White)) { Text("Close") }
+                Button({
+                    scope.launch {
+                        com.prism.music.ui.components.shareLayer(
+                            context, layer, "veloura-moment.png",
+                            "${song.title} · ${song.artistText} on Veloura https://music.youtube.com/watch?v=${song.id}",
+                            "Share this moment",
+                        )
+                    }
+                }) { Text("Share") }
+            }
+        }
+    }
+}
+
 /** "More like this": songs like the one playing (when the screen opened), from all of YouTube Music. */
 @Composable
 private fun SimilarScreen(c: AppContainer, onBack: () -> Unit) {
@@ -489,7 +638,7 @@ private fun SimilarScreen(c: AppContainer, onBack: () -> Unit) {
             rows = r?.picks.orEmpty().map { p ->
                 SimilarRowUi(
                     p.song.id, p.song.title, p.song.artistText, p.song.thumbnail, p.language.label,
-                    p.bpm?.let { "${Math.round(it)} BPM" }, p.key, p.match,
+                    p.bpm?.let { "${Math.round(it)} BPM" }, p.key, p.match, p.why,
                 )
             },
             message = message,
@@ -571,6 +720,7 @@ private fun Search(c: AppContainer, onPlayed: () -> Unit) {
 @Composable
 private fun MixSettings(c: AppContainer) {
     val settings by c.settings.flow.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
     VelouraMixSettings(
         VelouraMixSettingsUi(
             autoMix = settings.intelligentAutoMix,
@@ -579,6 +729,8 @@ private fun MixSettings(c: AppContainer) {
             seconds = settings.mixSeconds.coerceIn(1, CROSSFADE_SLIDER_MAX),
             maxSeconds = CROSSFADE_SLIDER_MAX,
             keepMixGoing = settings.sound.keepMixGoing,
+            hookMode = settings.sound.hookMode,
+            languageMix = settings.sound.languageMix,
         ),
         onAutoMix = { autoMixOn(c, it) },
         onStyle = { style ->
@@ -588,6 +740,18 @@ private fun MixSettings(c: AppContainer) {
         onAutomaticLength = { c.settings.setMixAuto(it) },
         onSeconds = { c.settings.setMixSeconds(it) },
         onKeepMixGoing = { c.settings.setKeepMixGoing(it) },
+        onHookMode = { c.settings.setHookMode(it) },
+        onLanguageMix = { c.settings.setLanguageMix(it) },
+        onWeddingMode = {
+            autoMixOn(c)
+            c.settings.setDjEffects(true)
+            c.settings.setDjStyle(com.prism.music.data.prefs.DjStyle.CLUB)
+            c.settings.setMixAuto(true)
+            c.settings.setHookMode(true)
+            c.settings.setLanguageMix(85)
+            c.settings.setKeepMixGoing(true)
+            android.widget.Toast.makeText(context, "Wedding mode on: DJ · Club, hooks, 85% Punjabi & Hindi. Arrange your queue as a set to build the energy.", android.widget.Toast.LENGTH_LONG).show()
+        },
     )
 }
 

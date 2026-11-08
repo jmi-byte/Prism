@@ -117,7 +117,7 @@ class VelouraScreensRenderTest {
             VelouraSimilarUi(
                 "Brown Munde", "AP Dhillon", null, "Punjabi", "Punjabi & Hindi songs", null, null,
                 listOf(
-                    SimilarRowUi("1", "Excuses", "AP Dhillon", null, "Punjabi", "98 BPM", "8A", 91),
+                    SimilarRowUi("1", "Excuses", "AP Dhillon", null, "Punjabi", "98 BPM", "8A", 91, "Same key, same tempo as Brown Munde · Punjabi · Related on YouTube Music"),
                     SimilarRowUi("2", "Lover", "Diljit Dosanjh", null, "Punjabi", "100 BPM", "9A", 86),
                     SimilarRowUi("3", "Kesariya", "Arijit Singh", null, "Hindi", "93 BPM", "8B", 78),
                     SimilarRowUi("4", "Insane", "AP Dhillon", null, "Punjabi", null, null, 71),
@@ -125,6 +125,16 @@ class VelouraScreensRenderTest {
             ),
             {}, {}, {}, {},
         )
+    }
+
+    @Test fun storyCard() = shoot("story-card") {
+        Box(Modifier.fillMaxSize().padding(40.dp)) {
+            VelouraStoryCard("Brown Munde", "AP Dhillon, Gurinder Gill, Shinda Kahlon", null, "Brown munde, now we roll in style")
+        }
+    }
+
+    @Test fun mixSettingsAll() = shoot("mix-settings-full") {
+        VelouraMixSettings(VelouraMixSettingsUi(true, TransitionStyle.DJ_CLUB, false, 8, 12, true, true, 70), {}, {}, {}, {})
     }
 
     @Test fun queue() = shoot("queue") {

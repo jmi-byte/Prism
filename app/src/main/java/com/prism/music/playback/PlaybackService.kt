@@ -296,6 +296,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         scope.launch { c.settings.flow.map { it.audioDiagnostics }.distinctUntilChanged().collect { on -> AudioDiagnostics.setEnabled(on) { AudioDiagnostics.about(c) } } }
         // The buttons beside play follow Settings → Player → Buttons as soon as they're changed.
         scope.launch { c.settings.flow.map { it.sessionButtons }.distinctUntilChanged().drop(1).collect { updateButtons() } }
+        // Veloura's Hook mode: each song jumps to its highlight as soon as that's known.
+        if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch { c.bestParts.current.collect { hookIfAsked(it) } }
         // Veloura's AutoMix button shows whether it's on.
         if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch { c.settings.flow.map { it.intelligentAutoMix }.distinctUntilChanged().drop(1).collect { updateButtons() } }
         // The waveform progress bar picked: the playing song (and what's next) get their outlines now, not at the next song.
@@ -1764,6 +1766,25 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     @Volatile private var autoplayJob: kotlinx.coroutines.Job? = null
     @Volatile private var keepGoingJob: kotlinx.coroutines.Job? = null
     @Volatile private var moreLikeJob: kotlinx.coroutines.Job? = null
+    private var hookedFor: String? = null
+
+    /**
+     * Veloura's Hook mode: a song that starts from its opening jumps to its highlight (its best part) once that's
+     * known, once per play. Not when it came in partway (AutoMix's cue), was moved already, is live or a podcast, or its
+     * highlight is in its first seconds or its last half-minute.
+     */
+    private fun hookIfAsked(cur: com.prism.music.data.BestParts.Current?) {
+        if (cur == null || !cur.resolved || !c.settings.current.sound.hookMode) return
+        val song = player.currentMediaItem?.toSong() ?: return
+        if (cur.songId != song.id || hookedFor == song.id) return
+        hookedFor = song.id
+        val at = cur.startMs ?: return
+        val dur = song.durationSec * 1000L
+        if (song.isLive || song.isEpisode || at < 5_000 || (dur > 0 && at > dur - 30_000)) return
+        if (player.currentPosition > 6_000 || (::mix.isInitialized && mix.blending)) return
+        AudioDiagnostics.log("automix", "hook mode: ${song.id} from ${at / 1000} s")
+        player.seekTo(at)
+    }
 
     /**
      * Veloura's "More like this" button (the car, the media controls): up to five songs like the one playing, same language
@@ -1795,9 +1816,22 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         if (player.mediaItemCount - player.currentMediaItemIndex > 2 || keepGoingJob?.isActive == true) return
         if (!c.network.isOnline()) return
         val seed = player.getMediaItemAt(player.mediaItemCount - 1).toSong()?.takeIf { !it.isEpisode && !it.isLive } ?: return
+        val mixShare = c.settings.current.sound.languageMix
         keepGoingJob = scope.launch {
             val queued = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet()
-            val found = runCatching { c.similarSongs.find(seed, queued, limit = 10, analyse = 8) }
+            // Language mix: the group the queue needs next to keep its balance, and a song of that group to start from
+            // (the latest queued, else one of the listener's liked songs).
+            val songs = (0 until player.mediaItemCount).mapNotNull { player.getMediaItemAt(it).toSong() }
+            val want = if (mixShare < 0) null else {
+                val recent = songs.takeLast(10).map { c.similarSongs.languageOf(it, fetchLyrics = false).group }
+                com.prism.music.LanguageMix.nextGroup(recent, mixShare)
+            }
+            val from = if (want == null) seed else {
+                songs.asReversed().firstOrNull { !it.isEpisode && !it.isLive && c.similarSongs.languageOf(it, false).group == want }
+                    ?: c.library.likedShown.value.shuffled().take(30).firstOrNull { c.similarSongs.languageOf(it, false).group == want }
+                    ?: seed
+            }
+            val found = runCatching { c.similarSongs.find(from, queued, limit = 10, analyse = 8, group = want) }
                 .onFailure { android.util.Log.w("VelouraMix", "keep the mix going failed", it) }.getOrNull() ?: return@launch
             if (c.queue.source.value !== src || !c.settings.current.sound.keepMixGoing) return@launch
             val now = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet()

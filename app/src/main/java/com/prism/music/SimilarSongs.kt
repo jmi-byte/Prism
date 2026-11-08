@@ -146,6 +146,8 @@ class SimilarSongs(private val c: AppContainer) {
         /** 0..100. */
         val match: Int,
         val analysed: Boolean,
+        /** "Same key, same tempo as Brown Munde · Punjabi · Related on YouTube Music" ([SimilarReasons]). */
+        val why: String = "",
     )
 
     data class Result(val seed: Song, val seedLanguage: SongLanguage, val picks: List<Pick>)
@@ -179,12 +181,15 @@ class SimilarSongs(private val c: AppContainer) {
         exclude: Set<String> = emptySet(),
         limit: Int = 20,
         analyse: Int = 12,
+        /** The language group to suggest from; null: the seed's own (Language mix can ask for the other). */
+        group: LanguageGroup? = null,
         onProgress: (Progress) -> Unit = {},
     ): Result {
         onProgress(Progress("Reading ${seed.title}…"))
         val seedLanguage = languageOf(seed, fetchLyrics = true)
         onProgress(Progress("Finding songs on YouTube Music…"))
         val related = runCatching { withContext(Dispatchers.IO) { c.ytm.related(seed.id, seed.title).songs } }.getOrDefault(emptyList())
+        val relatedIds = related.map { it.id }.toSet()
         val radio = runCatching { withContext(Dispatchers.IO) { c.radio(seed.id, "RDAMVM${seed.id}").songs } }.getOrDefault(emptyList())
         // Related first (YouTube's sense of "like this"), then the radio, each in its own order.
         val seen = HashSet<String>()
@@ -207,7 +212,7 @@ class SimilarSongs(private val c: AppContainer) {
             languages[s.id] = lang
             onProgress(Progress("Checking languages…", i + 1, candidates.size))
         }
-        val group = seedLanguage.group
+        val group = group ?: seedLanguage.group
         val same = candidates.filter { languages[it.id]?.group == group }
         // With the seed's language known, only its group; songs still unknown fill in when there are too few.
         val kept = when (group) {
@@ -227,7 +232,11 @@ class SimilarSongs(private val c: AppContainer) {
             val f = features(s.id)
             val analysed = f.bpm != null || f.key != null || f.loudness != null
             val score = SoundMatch.combined(SoundMatch.score(seedSound, f), rank, kept.size)
-            Pick(s, languages[s.id] ?: SongLanguage.UNKNOWN, f.bpm, f.key?.camelot, (score * 100).toInt().coerceIn(1, 99), analysed)
+            val lang = languages[s.id] ?: SongLanguage.UNKNOWN
+            Pick(
+                s, lang, f.bpm, f.key?.camelot, (score * 100).toInt().coerceIn(1, 99), analysed,
+                SimilarReasons.why(seed.title, lang, seedSound, f, related = s.id in relatedIds),
+            )
         }.sortedWith(compareByDescending<Pick> { it.language.group == group }.thenByDescending { it.match }).take(limit)
         return Result(seed, seedLanguage, picks)
     }

@@ -415,6 +415,8 @@ internal fun VelouraNowPlaying(
     showLyrics: Boolean = false,
     onLyrics: () -> Unit = {},
     lyrics: (@Composable (Modifier) -> Unit)? = null,
+    /** Shown under the lyrics: their romanisation and translation switches. */
+    lyricsOptions: (@Composable () -> Unit)? = null,
 ) {
     val glow = Brush.verticalGradient(listOf(Color(0xFFE9E6FF), Color(0xFFF7EAF6), Color(0xFFFFF3EC), Color.White))
     Column(Modifier.fillMaxSize().background(glow)) {
@@ -430,6 +432,7 @@ internal fun VelouraNowPlaying(
                         .background(Brush.verticalGradient(listOf(Color(0xFF1B2F86), Color(0xFF0B1650), Color(0xFF240E5A))))
                         .clickable(onClick = onLyrics),
                 ) { lyrics(Modifier.fillMaxSize()) }
+                lyricsOptions?.let { Box(Modifier.padding(top = 8.dp)) { it() } }
             } else {
                 Artwork(
                     ui.artwork,
@@ -695,6 +698,9 @@ data class VelouraMixSettingsUi(
     val seconds: Int,
     val maxSeconds: Int,
     val keepMixGoing: Boolean = true,
+    val hookMode: Boolean = false,
+    /** -1: follow each song; else the share of Punjabi & Hindi. */
+    val languageMix: Int = -1,
 )
 
 @Composable
@@ -705,6 +711,9 @@ internal fun VelouraMixSettings(
     onAutomaticLength: (Boolean) -> Unit,
     onSeconds: (Int) -> Unit,
     onKeepMixGoing: (Boolean) -> Unit = {},
+    onHookMode: (Boolean) -> Unit = {},
+    onLanguageMix: (Int) -> Unit = {},
+    onWeddingMode: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SettingsCard {
@@ -724,6 +733,36 @@ internal fun VelouraMixSettings(
                 }
                 Switch(ui.keepMixGoing, onKeepMixGoing, colors = SwitchDefaults.colors(checkedTrackColor = VelouraBlue))
             }
+        }
+        SettingsCard {
+            Text("Language mix", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+            Text("What Keep the mix going adds: songs in the same language as the last one, or a balance you choose.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp).clickable { onLanguageMix(if (ui.languageMix < 0) 70 else -1) }, verticalAlignment = Alignment.CenterVertically) {
+                Text("Follow each song", color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                Switch(ui.languageMix < 0, { onLanguageMix(if (it) -1 else 70) }, colors = SwitchDefaults.colors(checkedTrackColor = VelouraBlue))
+            }
+            if (ui.languageMix >= 0) {
+                Text(LanguageMix.describe(ui.languageMix), Modifier.padding(top = 8.dp), color = VelouraBlue, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Slider(ui.languageMix.toFloat(), { onLanguageMix((kotlin.math.round(it / 10f) * 10).toInt()) }, valueRange = 0f..100f, steps = 9)
+                Row(Modifier.fillMaxWidth()) {
+                    Text("English", color = VelouraMuted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    Text("Punjabi & Hindi", color = VelouraMuted, fontSize = 12.sp)
+                }
+            }
+        }
+        SettingsCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text("Hook mode", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                    Text("Every song starts at its highlight, skipping the intro. Great for discovering music fast.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
+                }
+                Switch(ui.hookMode, onHookMode, colors = SwitchDefaults.colors(checkedTrackColor = VelouraBlue))
+            }
+        }
+        SettingsCard {
+            Text("Wedding & bhangra mode", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+            Text("One tap for a party: DJ · Club transitions, songs entering at their hook, mostly Punjabi & Hindi (85%), and the mix kept going.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
+            Button(onWeddingMode, Modifier.padding(top = 10.dp), colors = ButtonDefaults.buttonColors(containerColor = VelouraOrange)) { Text("Turn on wedding mode") }
         }
         SettingsCard {
             Text("Transition style", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
@@ -798,6 +837,8 @@ data class SimilarRowUi(
     val keyLabel: String?,
     /** 0..100. */
     val match: Int,
+    /** Why it's suggested, in plain words. */
+    val why: String? = null,
 )
 
 data class VelouraSimilarUi(
@@ -877,12 +918,47 @@ private fun SimilarRow(r: SimilarRowUi, onPlay: (SimilarRowUi) -> Unit, onAdd: (
                 r.bpm?.let { Chip(it, VelouraNavy) }
                 r.keyLabel?.let { Chip("Key $it", VelouraNavy) }
             }
+            r.why?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(top = 4.dp), color = VelouraMuted, fontSize = 11.sp, lineHeight = 14.sp) }
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text("${r.match}%", color = VelouraBlue, fontWeight = FontWeight.Black, fontSize = 16.sp)
             Text("match", color = VelouraMuted, fontSize = 10.sp)
         }
         IconButton({ onAdd(r) }) { Icon(PrismIcons.PlaylistAdd, "Add to queue", tint = VelouraNavy) }
+    }
+}
+
+// ---- Story cards ----
+
+/**
+ * "Share this moment": a 9:16 card (shared at 1080 px wide) of the song playing: its cover, the line being sung, the
+ * song and artist, and the Veloura V.
+ */
+@Composable
+internal fun VelouraStoryCard(title: String, artist: String, artwork: String?, lyric: String?, modifier: Modifier = Modifier) {
+    Box(
+        modifier.aspectRatio(9f / 16f).clip(RoundedCornerShape(22.dp))
+            .background(Brush.verticalGradient(listOf(Color(0xFF1D3FBF), Color(0xFF0B1650), Color(0xFF2A0F63)))),
+    ) {
+        // A soft glow behind the cover, the icon's purple.
+        Box(Modifier.align(Alignment.Center).size(220.dp).background(Brush.radialGradient(listOf(Color(0x669A3DFF), Color.Transparent))))
+        Column(Modifier.fillMaxSize().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(Modifier.weight(0.6f))
+            Artwork(artwork, Modifier.fillMaxWidth(0.78f).aspectRatio(1f).shadow(20.dp, RoundedCornerShape(18.dp)), corner = 18.dp, seed = title.hashCode())
+            Spacer(Modifier.height(20.dp))
+            if (lyric != null) {
+                Text("“$lyric”", color = Color.White, fontWeight = FontWeight.Black, fontSize = 20.sp, lineHeight = 25.sp, textAlign = TextAlign.Center, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(14.dp))
+            }
+            Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(artist, color = Color.White.copy(alpha = 0.72f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.weight(1f))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                VelouraLogo(24.dp)
+                Text("Veloura", Modifier.padding(start = 6.dp), color = Color.White, fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic, fontSize = 16.sp)
+            }
+            Text("Music that never stops moving", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+        }
     }
 }
 
