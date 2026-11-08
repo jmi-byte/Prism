@@ -52,7 +52,8 @@ object PlaybackServices {
      */
     fun target(context: Context): Class<out PlaybackService> {
         running?.let { return it }
-        val want = classFor(AppIcons.current(context))
+        // Veloura has one icon (its ribbon V, on the classic service), whatever Prism's icon choice was left at.
+        val want = if (com.prism.music.BuildConfig.AUTOMIX_DJ) PlaybackService::class.java else classFor(AppIcons.current(context))
         runCatching {
             val pm = context.packageManager
             pm.setComponentEnabledSetting(ComponentName(context, want), PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP)

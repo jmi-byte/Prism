@@ -236,7 +236,7 @@
         <service
             android:name=".playback.PlaybackService"
             android:exported="true"
-            android:icon="@mipmap/ic_launcher"
+            android:icon="${appIcon}"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaLibraryService" />
