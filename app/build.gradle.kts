@@ -26,8 +26,8 @@ android {
         applicationId = if (autoMixDjBuild) "com.jmibyte.veloura" else "com.prism.music"
         minSdk = 26
         targetSdk = 36
-        versionCode = if (autoMixDjBuild) 77 else 57
-        versionName = if (autoMixDjBuild) "0.9.1" else "1.8.2"
+        versionCode = if (autoMixDjBuild) 78 else 57
+        versionName = if (autoMixDjBuild) "0.9.2" else "1.8.2"
         vectorDrawables { useSupportLibrary = true }
         // The name under the launcher icon; a side-by-side build (below) is called "Prism Dev" so it can't be mistaken for Prism.
         manifestPlaceholders["appLabel"] = if (autoMixDjBuild) "Veloura" else "@string/app_name"

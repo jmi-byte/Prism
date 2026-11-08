@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlin.math.roundToInt
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +52,7 @@ private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ, QUEUE, SIMILAR, PARTY
 /** Veloura's UI (laid out in VelouraScreens.kt). Prism's playback and YouTube Music engines remain underneath. */
 @Composable
 fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
+    VelouraThemeFollows(c)
     var tab by remember { mutableStateOf(VelouraTab.HOME) }
     // Where Now Playing's ⌄ goes back to.
     var lastTab by remember { mutableStateOf(VelouraTab.HOME) }
@@ -110,7 +112,7 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
         if (saveDialog) SaveMixDialog(c) { saveDialog = false }
         when (tab) {
             // The player and its plan fill the screen, as in the design.
-            VelouraTab.DJ -> Surface(Modifier.fillMaxSize(), color = Color.White) {
+            VelouraTab.DJ -> Surface(Modifier.fillMaxSize(), color = VelouraSurface) {
                 NowPlayingScreen(
                     c, onCollapse = { go(lastTab) },
                     menu = listOf(
@@ -224,6 +226,7 @@ private fun HomeScreen(
     var minute by remember { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) { while (true) { delay(60_000); minute++ } }
     val mood = remember(minute) { ContextMood.of(ContextMood.now(homeContext)) }
+    var moodDone by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         if (cache.home.value == null) {
             cache.home.value = withContext(Dispatchers.IO) { runCatching { c.ytm.fullHome(pages = 3) }.getOrDefault(emptyList()) }
@@ -256,6 +259,7 @@ private fun HomeScreen(
             playlistsError = if (shelves?.isEmpty() == true) "Couldn't reach YouTube Music. Try Search." else null,
             autoMixOn = settings.intelligentAutoMix,
             mood = mood.label to mood.detail,
+            moodDone = moodDone,
         ),
         onSearch = onSearch,
         onTile = { t ->
@@ -276,18 +280,23 @@ private fun HomeScreen(
         onConnect = onConnect,
         onQuickMix = ::startMixing,
         onMood = {
-            // The mood's transitions now; its set shape on the songs ahead, when there are some.
+            // The mood's transitions now; its set shape on the songs ahead, when there are some. Said on the card and
+            // in a toast (the header's line was too small to notice).
             applyTransitionStyle(c, mood.style)
             autoMixOn(c)
+            moodDone = "Arranging the queue…"
             scope.launch {
                 val upcoming = c.player.upNext.value.size
-                if (upcoming >= 2) {
-                    val said = arrangeAsSet(c, mood.shape) { _, _ -> }
-                    onMessage("${mood.label}: $said")
+                val said = if (upcoming >= 2) {
+                    "${mood.style.label} transitions. " + arrangeAsSet(c, mood.shape) { _, _ -> }
                 } else {
-                    onMessage("${mood.label}: ${mood.style.label} transitions")
                     if (current == null && !items.isNullOrEmpty()) play(items.first())
+                    "${mood.style.label} transitions, AutoMix on." + if (upcoming < 2) " Queue songs to have them arranged as a ${mood.shape.label.lowercase()} set." else ""
                 }
+                moodDone = said
+                android.widget.Toast.makeText(homeContext, "${mood.label}: $said", android.widget.Toast.LENGTH_LONG).show()
+                delay(8_000)
+                moodDone = null
             }
         },
     )
@@ -299,6 +308,7 @@ private fun HomeScreen(
  */
 @Composable
 fun VelouraDjScreen(c: AppContainer, bottomPadding: androidx.compose.ui.unit.Dp, onFindMusic: () -> Unit) {
+    VelouraThemeFollows(c)
     var queue by remember { mutableStateOf(false) }
     MaterialTheme(colorScheme = VelouraColors) {
         Box(Modifier.fillMaxSize().padding(bottom = bottomPadding)) {
@@ -359,6 +369,7 @@ private fun NowPlayingScreen(c: AppContainer, onCollapse: () -> Unit, menu: List
     val status = autoMixStatus(c, song?.id, next?.id, position)
     // Kept across songs: lyrics stay up from one song to the next until switched back to the cover.
     var showLyrics by rememberSaveable { mutableStateOf(false) }
+    var fullLyrics by rememberSaveable { mutableStateOf(false) }
     val s = song
     if (s == null) {
         Column(Modifier.fillMaxSize()) {
@@ -369,25 +380,7 @@ private fun NowPlayingScreen(c: AppContainer, onCollapse: () -> Unit, menu: List
         }
         return
     }
-    VelouraNowPlaying(
-        VelouraNowPlayingUi(
-            title = s.title, artist = s.artistText, artwork = s.thumbnail, liked = s.id in liked, playing = playing,
-            positionMs = position, durationMs = c.player.duration.coerceAtLeast(s.durationSec * 1000L),
-            autoMixOn = settings.intelligentAutoMix, status = status, shuffle = shuffle, repeatMode = repeat,
-        ),
-        onCollapse = onCollapse,
-        menu = menu,
-        onSeek = { c.player.seekTo(it) },
-        onLike = { c.library.toggleLike(s) },
-        onAutoMix = { autoMixOn(c, it) },
-        onShuffle = { c.player.toggleShuffle() },
-        onPrevious = { c.player.previous() },
-        onPlayPause = { c.player.togglePlay() },
-        onNext = { c.player.next() },
-        onRepeat = { c.player.cycleRepeat() },
-        showLyrics = showLyrics,
-        onLyrics = { showLyrics = !showLyrics },
-        lyricsOptions = {
+    val lyricsOptions: @Composable () -> Unit = {
             // Lyrics in Gurmukhi or Devanagari: in Latin letters (under each line, or instead), and their English meaning.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val roman = settings.romanize
@@ -412,17 +405,54 @@ private fun NowPlayingScreen(c: AppContainer, onCollapse: () -> Unit, menu: List
                     else { c.settings.setLyricsTranslateTo("en"); c.settings.setLyricsTranslate(true) }
                 }, { Text("English meaning") })
             }
-        },
-        lyrics = { modifier ->
+        }
+    val lyricsPanel: @Composable (Modifier) -> Unit = { modifier ->
             // Prism's own lyrics panel (word-by-word karaoke), with the listener's lyrics settings.
-            val lyricsState = com.prism.music.ui.player.rememberLyricsState(s, opened = showLyrics)
+            val lyricsState = com.prism.music.ui.player.rememberLyricsState(s, opened = showLyrics || fullLyrics)
             CompositionLocalProvider(com.prism.music.ui.theme.LocalAppSettings provides settings) {
                 com.prism.music.ui.player.LyricsPanel(
                     lyricsState, playing, controlsOpen = true, onRevealControls = {}, onHideControls = {},
                     modifier = modifier, lyricsGround = false,
                 )
             }
-        },
+        }
+    // Lyrics full screen (from the lyrics box's corner button); Back returns to Now Playing.
+    if (fullLyrics) {
+        androidx.activity.compose.BackHandler { fullLyrics = false }
+        VelouraFullLyrics(
+            title = s.title, artist = s.artistText, artwork = s.thumbnail, playing = playing,
+            positionMs = position, durationMs = c.player.duration.coerceAtLeast(s.durationSec * 1000L),
+            onClose = { fullLyrics = false },
+            onPlayPause = { c.player.togglePlay() }, onPrevious = { c.player.previous() }, onNext = { c.player.next() },
+            onSeek = { c.player.seekTo(it) },
+            lyricsOptions = lyricsOptions,
+            // Larger or smaller lyrics, kept (Prism's lyrics size setting): 80% to 180%.
+            onTextSize = { step -> c.settings.setLyricsScale(((settings.lyricsScale + step * 0.1f) * 10).roundToInt().div(10f).coerceIn(0.8f, 1.8f)) },
+            lyrics = lyricsPanel,
+        )
+        return
+    }
+    VelouraNowPlaying(
+        VelouraNowPlayingUi(
+            title = s.title, artist = s.artistText, artwork = s.thumbnail, liked = s.id in liked, playing = playing,
+            positionMs = position, durationMs = c.player.duration.coerceAtLeast(s.durationSec * 1000L),
+            autoMixOn = settings.intelligentAutoMix, status = status, shuffle = shuffle, repeatMode = repeat,
+        ),
+        onCollapse = onCollapse,
+        menu = menu,
+        onSeek = { c.player.seekTo(it) },
+        onLike = { c.library.toggleLike(s) },
+        onAutoMix = { autoMixOn(c, it) },
+        onShuffle = { c.player.toggleShuffle() },
+        onPrevious = { c.player.previous() },
+        onPlayPause = { c.player.togglePlay() },
+        onNext = { c.player.next() },
+        onRepeat = { c.player.cycleRepeat() },
+        showLyrics = showLyrics,
+        onLyrics = { showLyrics = !showLyrics },
+        lyricsOptions = lyricsOptions,
+        lyrics = lyricsPanel,
+        onFullLyrics = { fullLyrics = true },
     )
 }
 
@@ -607,6 +637,27 @@ private fun SetDialog(c: AppContainer, onClose: () -> Unit) {
     )
 }
 
+/**
+ * Veloura's theme from its setting (Auto: the phone's dark mode), and the status bar's icons to match (dark icons on
+ * the light theme, light ones on the dark).
+ */
+@Composable
+private fun VelouraThemeFollows(c: AppContainer) {
+    val choice = c.settings.flow.collectAsState().value.sound.velouraTheme
+    val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
+    val dark = when (choice) { 1 -> false; 2 -> true; else -> systemDark }
+    if (VelouraTheme.dark != dark) VelouraTheme.dark = dark
+    val view = androidx.compose.ui.platform.LocalView.current
+    SideEffect {
+        (view.context as? android.app.Activity)?.window?.let { w ->
+            androidx.core.view.WindowCompat.getInsetsController(w, view).apply {
+                isAppearanceLightStatusBars = !dark
+                isAppearanceLightNavigationBars = !dark
+            }
+        }
+    }
+}
+
 /** A [TransitionStyle] as settings: crossfade is DJ effects off; a DJ style sets them on with its style. */
 private fun applyTransitionStyle(c: AppContainer, style: TransitionStyle) {
     c.settings.setDjEffects(style.dj != null)
@@ -713,7 +764,7 @@ private fun StoryDialog(c: AppContainer, onClose: () -> Unit) {
                 Modifier.width(270.dp).recordInto(layer),
             )
             Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(onClose, colors = ButtonDefaults.outlinedButtonColors(containerColor = Color.White)) { Text("Close") }
+                OutlinedButton(onClose, colors = ButtonDefaults.outlinedButtonColors(containerColor = VelouraSurface)) { Text("Close") }
                 Button({
                     scope.launch {
                         com.prism.music.ui.components.shareLayer(
@@ -798,7 +849,7 @@ private fun SimilarScreen(c: AppContainer, onBack: () -> Unit) {
 
 @Composable
 private fun ActionCard(title: String, detail: String, action: String, onClick: () -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp)) {
+    Card(colors = CardDefaults.cardColors(containerColor = VelouraSurface), shape = RoundedCornerShape(20.dp)) {
         Column(Modifier.fillMaxWidth().padding(18.dp)) {
             Text(title, color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 18.sp)
             Text(detail, color = VelouraMuted, modifier = Modifier.padding(top = 5.dp))
@@ -878,6 +929,8 @@ private fun MixSettings(c: AppContainer) {
         onLanguageMix = { c.settings.setLanguageMix(it) },
         onTempoLock = { c.settings.setTempoLock(it) },
         onMoodAuto = { c.settings.setMoodAuto(it) },
+        theme = settings.sound.velouraTheme,
+        onTheme = { c.settings.setVelouraTheme(it) },
         onWeddingMode = {
             autoMixOn(c)
             c.settings.setDjEffects(true)
@@ -904,7 +957,7 @@ private fun Account(c: AppContainer, onConnect: () -> Unit, onBack: () -> Unit) 
     ) {
         AsyncImage(
             settings.accountAvatar.takeIf { it.isNotBlank() }, null,
-            Modifier.size(92.dp).clip(CircleShape).background(Color(0xFFDCEEFF)),
+            Modifier.size(92.dp).clip(CircleShape).background(VelouraTint),
         )
         Text(
             if (settings.isLoggedIn) settings.accountName.ifBlank { "YouTube Music connected" } else "Connect YouTube Music",
@@ -914,12 +967,30 @@ private fun Account(c: AppContainer, onConnect: () -> Unit, onBack: () -> Unit) 
             Text(settings.accountEmail, color = VelouraMuted, modifier = Modifier.padding(top = 5.dp))
             Card(
                 Modifier.fillMaxWidth().padding(top = 22.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = VelouraSurface), shape = RoundedCornerShape(20.dp),
             ) {
                 Column(Modifier.padding(18.dp)) {
                     Text("Your music is linked", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 18.sp)
                     Text("Veloura can use your YouTube Music likes, playlists, recommendations and playback session.", color = VelouraMuted, modifier = Modifier.padding(top = 6.dp))
-                    Button({ c.library.syncInBackground() }, Modifier.padding(top = 14.dp)) { Text("Sync library now") }
+                    // The sync said as it goes: syncing, then what came over (it used to start with no sign at all).
+                    val sync by c.library.syncState.collectAsState()
+                    var asked by remember { mutableStateOf(false) }
+                    val liked by c.library.likedIds.collectAsState()
+                    val lists by c.library.playlists.collectAsState()
+                    Button(
+                        { asked = true; c.library.syncInBackground() }, Modifier.padding(top = 14.dp),
+                        enabled = sync != com.prism.music.data.SyncState.SYNCING,
+                    ) {
+                        if (sync == com.prism.music.data.SyncState.SYNCING) {
+                            CircularProgressIndicator(Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                            Text("Syncing…", Modifier.padding(start = 8.dp))
+                        } else Text("Sync library now")
+                    }
+                    if (asked) when (sync) {
+                        com.prism.music.data.SyncState.DONE -> Text("Synced ✓ ${liked.size} liked songs and ${lists.size} playlists are up to date.", color = VelouraGreen, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                        com.prism.music.data.SyncState.ERROR -> Text("Couldn't reach YouTube Music. Check your connection and try again.", color = Color(0xFFD03050), fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                        else -> {}
+                    }
                 }
             }
         } else {
@@ -1112,7 +1183,7 @@ private fun PlaylistRow(
     action: Pair<String, () -> Unit>?,
     onClick: () -> Unit,
 ) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = VelouraSurface), shape = RoundedCornerShape(18.dp)) {
         Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(item.thumbnail, null, Modifier.size(62.dp).clip(RoundedCornerShape(14.dp)))
             Column(Modifier.padding(horizontal = 12.dp).weight(1f)) {
@@ -1135,7 +1206,7 @@ private fun PlaylistRow(
 
 @Composable
 private fun SongRow(song: Song, trailing: String, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = VelouraSurface), shape = RoundedCornerShape(18.dp)) {
         Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(song.thumbnail, null, Modifier.size(62.dp).clip(RoundedCornerShape(14.dp)))
             Column(Modifier.padding(horizontal = 12.dp).weight(1f)) {

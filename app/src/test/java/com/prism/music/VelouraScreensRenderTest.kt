@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background as androidxBackground
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -183,6 +184,59 @@ class VelouraScreensRenderTest {
             SavedMixRow(SavedMixUi("1", "Friday night", "18 songs · DJ · Club · 7 Nov", listOf(null, null, null, null)), {}, {}, {})
             SavedMixRow(SavedMixUi("2", "Road trip", "32 songs · Crossfade · 2 Nov", listOf(null)), {}, {}, {})
         }
+    }
+
+    private fun dark(block: () -> Unit) { VelouraTheme.dark = true; try { block() } finally { VelouraTheme.dark = false } }
+
+    @Test fun homeDark() = dark {
+        shoot("home-dark") {
+            Column(Modifier.fillMaxSize().androidxBackground(VelouraBackground)) {
+                VelouraBrandBar(null, {}, {})
+                Box(Modifier.weight(1f)) {
+                    VelouraHome(
+                        VelouraHomeUi(
+                            loggedIn = true,
+                            playlists = listOf(PlaylistCard("1", "Party Hits", "120 songs", null), PlaylistCard("2", "Road Trip", "90 songs", null), PlaylistCard("3", "Workout", "80 songs", null)),
+                            autoMixOn = true, mood = "Evening build" to "Energy rising into the night, Club blends.", moodDone = "DJ · Club transitions. Arranged as a set: Build up.",
+                        ),
+                        {}, {}, {}, {}, {}, {},
+                    )
+                }
+                VelouraTabBar(VelouraTabItem.HOME) {}
+            }
+        }
+    }
+
+    @Test fun mixSettingsDark() = dark {
+        shoot("mix-settings-dark") {
+            Box(Modifier.fillMaxSize().androidxBackground(VelouraBackground)) {
+                VelouraMixSettings(VelouraMixSettingsUi(true, TransitionStyle.DJ_MASHUP, true, 6, 12), {}, {}, {}, {}, theme = 2)
+            }
+        }
+    }
+
+    @Test fun nowPlayingDark() = dark {
+        shoot("now-playing-dark") {
+            VelouraNowPlaying(
+                VelouraNowPlayingUi("Desi Da Drum", "Amrit Maan", null, liked = true, playing = true, positionMs = 80_000, durationMs = 213_000, autoMixOn = true, status = "Next mix in ~1:08 · Phrase-aligned · DJ · Club · 9 s", shuffle = false, repeatMode = 0),
+                {}, emptyList(), {}, {}, {}, {}, {}, {}, {}, {},
+            )
+        }
+    }
+
+    @Test fun fullLyrics() = shoot("lyrics-full-screen") {
+        VelouraFullLyrics(
+            "Desi Da Drum", "Amrit Maan", null, playing = true, positionMs = 80_000, durationMs = 213_000,
+            {}, {}, {}, {}, {}, onTextSize = {},
+            lyrics = { m ->
+                Column(m, verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(22.dp, androidx.compose.ui.Alignment.CenterVertically)) {
+                    androidx.compose.material3.Text("Kehnde lok pind de", color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.4f), fontSize = 26.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    androidx.compose.material3.Text("Akh vaunda si purana jehde tham ni", color = androidx.compose.ui.graphics.Color.White, fontSize = 34.sp, lineHeight = 40.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    androidx.compose.material3.Text("Pavve jidde kad waaliye", color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.4f), fontSize = 26.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                    androidx.compose.material3.Text("Dhol gayi ae desi da", color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.4f), fontSize = 26.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                }
+            },
+        )
     }
 
     @Test fun queuePlan() = shoot("queue-plan") {

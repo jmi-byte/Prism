@@ -718,6 +718,8 @@ data class SoundPrefs(
     val tempoLock: Int = 0,
     /** Veloura: transitions follow the moment (time of day, the car) by themselves. */
     val moodAuto: Boolean = false,
+    /** Veloura's look: 0 follows the phone, 1 light, 2 dark. */
+    val velouraTheme: Int = 0,
     /** Normalize volume's level, in LUFS (A2). */
     val normalizeTarget: Int = -14,
     /** An album playing through keeps its own song-to-song levels: one level for the whole album (A2). */
@@ -1908,6 +1910,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val languageMix = intPreferencesKey("veloura_language_mix")
         val tempoLock = intPreferencesKey("veloura_tempo_lock")
         val moodAuto = booleanPreferencesKey("veloura_mood_auto")
+        val velouraTheme = intPreferencesKey("veloura_theme")
         val mixSeconds = intPreferencesKey("mix_seconds")
         val mixAuto = booleanPreferencesKey("mix_auto")
         val mixBeatMatch = booleanPreferencesKey("mix_beat_match")
@@ -2269,7 +2272,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
                 "hold_seek_seconds", "canvas_with_downloads", "canvas_with_downloads_cellular", "audio_quality", "cellular_quality",
                 "premium_stream", "autoplay", "autoplay_source", "radio_songs_only", "songs_everywhere", "show_track_length",
                 "audio_diagnostics", "search_keyboard", "double_tap_seek_seconds", "stop_on_swipe_away", "data_saver",
-                "video_continues", "lossless", "lossless_local", "normalize", "skip_silence", "mix", "intelligent_auto_mix", "veloura_dj_effects", "veloura_dj_style", "veloura_keep_mix_going", "veloura_hook_mode", "veloura_language_mix", "veloura_tempo_lock", "veloura_mood_auto", "mix_seconds", "mix_auto",
+                "video_continues", "lossless", "lossless_local", "normalize", "skip_silence", "mix", "intelligent_auto_mix", "veloura_dj_effects", "veloura_dj_style", "veloura_keep_mix_going", "veloura_hook_mode", "veloura_language_mix", "veloura_tempo_lock", "veloura_mood_auto", "veloura_theme", "mix_seconds", "mix_auto",
                 "mix_beat_match", "mix_tempo_cellular", "content_country", "video_max_height", "cache_size_mb", "download_wifi_only",
                 "download_likes", "smart_downloads", "smart_download_gb", "offline_gb", "smart_downloads_cellular", "eq",
                 "home_layout", "auto_add_sections", "home_hide_kinds", "home_header_picture", "search_sections", "search_chips", "replay_hours", "greeting_text", "greeting_show_name", "home_shortcuts",
@@ -2587,6 +2590,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
                 languageMix = (p[K.languageMix] ?: d.sound.languageMix).coerceIn(-1, 100),
                 tempoLock = (p[K.tempoLock] ?: d.sound.tempoLock).coerceIn(0, 200),
                 moodAuto = p[K.moodAuto] ?: d.sound.moodAuto,
+                velouraTheme = p[K.velouraTheme] ?: d.sound.velouraTheme,
                 normalizeTarget = (p[K.normalizeTarget] ?: d.sound.normalizeTarget).coerceIn(-30, -5),
                 normalizeAlbums = p[K.normalizeAlbums] ?: d.sound.normalizeAlbums,
                 musicSpeed = (p[K.musicSpeedDefault] ?: d.sound.musicSpeed).coerceIn(0.5f, 2f),
@@ -3046,6 +3050,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
     fun setLanguageMix(v: Int) = edit { it[K.languageMix] = v.coerceIn(-1, 100) }
     fun setTempoLock(v: Int) = edit { it[K.tempoLock] = v.coerceIn(0, 200) }
     fun setMoodAuto(v: Boolean) = edit { it[K.moodAuto] = v }
+    fun setVelouraTheme(v: Int) = edit { it[K.velouraTheme] = v.coerceIn(0, 2) }
     fun setMixSeconds(v: Int) = edit { it[K.mixSeconds] = v.coerceIn(1, MAX_CROSSFADE_SECONDS) }
     fun setMixAuto(v: Boolean) = edit { it[K.mixAuto] = v }
     fun setMixBeatMatch(v: Boolean) = edit { it[K.mixBeatMatch] = v }

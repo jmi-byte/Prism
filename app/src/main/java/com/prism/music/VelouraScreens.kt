@@ -15,6 +15,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -46,23 +48,49 @@ import kotlin.math.sin
  * sample data (VelouraScreensRenderTest). AutoMixDjUi.kt reads the app's state into them.
  */
 
+/** Veloura's light or dark look, set from the app's setting (Auto follows the phone). Read as state, so a change redraws. */
+internal object VelouraTheme {
+    var dark by androidx.compose.runtime.mutableStateOf(false)
+}
+
+private fun pick(light: Color, dark: Color) = if (VelouraTheme.dark) dark else light
+
 internal val VelouraBlue = Color(0xFF1E6BFF)
 internal val VelouraCyan = Color(0xFF12CFE4)
 internal val VelouraOrange = Color(0xFFFF8A34)
-internal val VelouraNavy = Color(0xFF0B1B3F)
-internal val VelouraBackground = Color(0xFFF6F9FE)
-internal val VelouraMuted = Color(0xFF66768C)
-internal val VelouraLine = Color(0xFFE3EAF4)
+/** The main text and icon colour: navy on light, near-white on dark. */
+internal val VelouraNavy: Color get() = pick(Color(0xFF0B1B3F), Color(0xFFE8EEF8))
+/** Text that's always dark (on a white pill, say), whatever the theme. */
+internal val VelouraInk = Color(0xFF0B1B3F)
+internal val VelouraBackground: Color get() = pick(Color(0xFFF6F9FE), Color(0xFF0A0F1C))
+/** Cards, rows and bars: white on light, a raised navy on dark. */
+internal val VelouraSurface: Color get() = pick(Color.White, Color(0xFF151C2E))
+/** A soft blue tint (a held row, an unselected segment, a chip's ground). */
+internal val VelouraTint: Color get() = pick(Color(0xFFEAF1FB), Color(0xFF1E2840))
+/** Seek bar tracks and dividers. */
+internal val VelouraTrack: Color get() = pick(Color(0xFFDCE4EF), Color(0xFF2C3650))
+internal val VelouraMuted: Color get() = pick(Color(0xFF66768C), Color(0xFF9AA8BE))
+internal val VelouraLine: Color get() = pick(Color(0xFFE3EAF4), Color(0xFF252F47))
 internal val VelouraPurple = Color(0xFF8C55E8)
 internal val VelouraGreen = Color(0xFF22B573)
 
-internal val VelouraColors = lightColorScheme(
-    primary = VelouraBlue, onPrimary = Color.White,
-    primaryContainer = Color(0xFFDCEEFF), onPrimaryContainer = VelouraNavy,
-    secondary = VelouraCyan, tertiary = VelouraOrange,
-    background = VelouraBackground, surface = Color.White,
-    surfaceVariant = Color(0xFFEAF4FF), onSurface = VelouraNavy, onSurfaceVariant = VelouraMuted,
-)
+internal val VelouraColors: androidx.compose.material3.ColorScheme
+    get() = if (VelouraTheme.dark) androidx.compose.material3.darkColorScheme(
+        primary = VelouraBlue, onPrimary = Color.White,
+        primaryContainer = Color(0xFF1C3566), onPrimaryContainer = Color(0xFFDCEEFF),
+        secondary = VelouraCyan, tertiary = VelouraOrange,
+        background = VelouraBackground, onBackground = VelouraNavy, surface = VelouraSurface, onSurface = VelouraNavy,
+        surfaceVariant = VelouraTint, onSurfaceVariant = VelouraMuted,
+        surfaceContainer = VelouraSurface, surfaceContainerHigh = Color(0xFF1B2338), surfaceContainerHighest = Color(0xFF222B42),
+        surfaceContainerLow = VelouraSurface, surfaceContainerLowest = VelouraBackground,
+        outline = Color(0xFF3A4660), outlineVariant = VelouraLine,
+    ) else lightColorScheme(
+        primary = VelouraBlue, onPrimary = Color.White,
+        primaryContainer = Color(0xFFDCEEFF), onPrimaryContainer = VelouraNavy,
+        secondary = VelouraCyan, tertiary = VelouraOrange,
+        background = VelouraBackground, surface = Color.White,
+        surfaceVariant = Color(0xFFEAF4FF), onSurface = VelouraNavy, onSurfaceVariant = VelouraMuted,
+    )
 
 // ---- Shared pieces ----
 
@@ -79,7 +107,7 @@ internal object VelouraIcons {
 
 /** The design's seek bar: a thin track and a round handle. Tap or drag to move. */
 @Composable
-internal fun VelouraSeekBar(positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit, modifier: Modifier = Modifier) {
+internal fun VelouraSeekBar(positionMs: Long, durationMs: Long, onSeek: (Long) -> Unit, modifier: Modifier = Modifier, light: Boolean = false) {
     val total = durationMs.coerceAtLeast(1)
     var drag by remember { mutableStateOf<Float?>(null) }
     val f = drag ?: (positionMs.toFloat() / total).coerceIn(0f, 1f)
@@ -97,11 +125,13 @@ internal fun VelouraSeekBar(positionMs: Long, durationMs: Long, onSeek: (Long) -
         val y = size.height / 2
         val track = 4.dp.toPx()
         val r = 8.dp.toPx()
-        drawRoundRect(Color(0xFFDCE4EF), Offset(0f, y - track / 2), Size(size.width, track), CornerRadius(track))
-        drawRoundRect(VelouraBlue, Offset(0f, y - track / 2), Size(size.width * f, track), CornerRadius(track))
+        // On a dark ground (lyrics full screen): a white bar on a faint track.
+        val fill = if (light) Color.White else VelouraBlue
+        drawRoundRect(if (light) Color.White.copy(alpha = 0.25f) else VelouraTrack, Offset(0f, y - track / 2), Size(size.width, track), CornerRadius(track))
+        drawRoundRect(fill, Offset(0f, y - track / 2), Size(size.width * f, track), CornerRadius(track))
         val x = (size.width * f).coerceIn(r, size.width - r)
         drawCircle(Color.White, r + 2.dp.toPx(), Offset(x, y))
-        drawCircle(VelouraBlue, r, Offset(x, y))
+        drawCircle(fill, r, Offset(x, y))
     }
 }
 
@@ -180,7 +210,7 @@ enum class VelouraTabItem(val label: String) { HOME("Home"), SEARCH("Search"), L
 /** The tab bar: Home, Search, Library and DJ. */
 @Composable
 internal fun VelouraTabBar(selected: VelouraTabItem?, onSelect: (VelouraTabItem) -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Color.White)) {
+    Column(Modifier.fillMaxWidth().background(VelouraSurface)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(VelouraLine))
         Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 6.dp, vertical = 6.dp)) {
             VelouraTabItem.entries.forEach { t ->
@@ -205,7 +235,7 @@ internal fun VelouraTabBar(selected: VelouraTabItem?, onSelect: (VelouraTabItem)
 
 @Composable
 internal fun VelouraSegments(labels: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Color(0xFFEAF1FB)).padding(4.dp)) {
+    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(VelouraTint).padding(4.dp)) {
         labels.forEachIndexed { i, label ->
             val on = i == selected
             Box(
@@ -257,7 +287,7 @@ internal fun WaveBars(
                 f <= progress -> VelouraBlue
                 outAt != null && f >= outAt -> VelouraOrange
                 inAt != null && f < inAt -> Color(0xFFBFE8D6)
-                else -> Color(0xFFD5DEEA)
+                else -> VelouraTrack
             }
             drawLine(color, Offset(i * step + step / 2, (size.height - h) / 2), Offset(i * step + step / 2, (size.height + h) / 2), step * 0.5f, androidx.compose.ui.graphics.StrokeCap.Round)
         }
@@ -290,6 +320,8 @@ data class VelouraHomeUi(
     val autoMixOn: Boolean,
     /** The moment's mood (label, detail), from the time of day and the car. */
     val mood: Pair<String, String>? = null,
+    /** What setting the mood just did (shown on the card for a few seconds), or null. */
+    val moodDone: String? = null,
 )
 
 enum class HomeTile { AUTOMIX_PARTY, DJ_MIXES, GENRES, FOR_YOU }
@@ -308,7 +340,7 @@ internal fun VelouraHome(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 18.dp)) {
         Text("Discover Music", Modifier.padding(start = 20.dp, top = 14.dp), color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 27.sp)
         Row(
-            Modifier.padding(horizontal = 20.dp).padding(top = 12.dp).fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Color.White)
+            Modifier.padding(horizontal = 20.dp).padding(top = 12.dp).fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(VelouraSurface)
                 .border(1.dp, VelouraLine, RoundedCornerShape(24.dp)).clickable(onClick = onSearch).padding(horizontal = 16.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -324,7 +356,7 @@ internal fun VelouraHome(
         if (!ui.loggedIn) {
             Card(
                 Modifier.padding(horizontal = 20.dp).padding(top = 16.dp).fillMaxWidth().clickable(onClick = onConnect),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF3FF)), shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = VelouraTint), shape = RoundedCornerShape(18.dp),
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Text("Connect YouTube Music", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
@@ -364,16 +396,16 @@ internal fun VelouraHome(
                     Column(Modifier.weight(1f)) {
                         Text("RIGHT NOW", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Black)
                         Text(label, color = Color.White, fontWeight = FontWeight.Black, fontSize = 18.sp)
-                        Text(detail, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                        Text(ui.moodDone ?: detail, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
                     }
-                    Text("Set the mood", Modifier.clip(RoundedCornerShape(16.dp)).background(Color.White).padding(horizontal = 12.dp, vertical = 8.dp), color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(if (ui.moodDone != null) "Mood set ✓" else "Set the mood", Modifier.clip(RoundedCornerShape(16.dp)).background(Color.White).padding(horizontal = 12.dp, vertical = 8.dp), color = VelouraInk, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }
         Text("Quick Mixes", Modifier.padding(start = 20.dp, top = 22.dp), color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 19.sp)
         Card(
             Modifier.padding(horizontal = 20.dp).padding(top = 10.dp).fillMaxWidth().clickable(onClick = onQuickMix),
-            colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = VelouraSurface), shape = RoundedCornerShape(18.dp),
             elevation = CardDefaults.cardElevation(2.dp),
         ) {
             Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -438,8 +470,13 @@ internal fun VelouraNowPlaying(
     lyrics: (@Composable (Modifier) -> Unit)? = null,
     /** Shown under the lyrics: their romanisation and translation switches. */
     lyricsOptions: (@Composable () -> Unit)? = null,
+    /** Opens the lyrics full screen ([VelouraFullLyrics]). */
+    onFullLyrics: (() -> Unit)? = null,
 ) {
-    val glow = Brush.verticalGradient(listOf(Color(0xFFE9E6FF), Color(0xFFF7EAF6), Color(0xFFFFF3EC), Color.White))
+    val glow = Brush.verticalGradient(
+        if (VelouraTheme.dark) listOf(Color(0xFF1B1840), Color(0xFF1E1530), Color(0xFF181420), VelouraBackground)
+        else listOf(Color(0xFFE9E6FF), Color(0xFFF7EAF6), Color(0xFFFFF3EC), Color.White),
+    )
     Column(Modifier.fillMaxSize().background(glow)) {
         VelouraTitleBar("Now Playing", PrismIcons.ChevronDown, "Close player", onCollapse, menu, background = Color.Transparent)
         Column(
@@ -452,7 +489,13 @@ internal fun VelouraNowPlaying(
                     Modifier.padding(top = 18.dp).fillMaxWidth().height(290.dp).shadow(18.dp, RoundedCornerShape(22.dp)).clip(RoundedCornerShape(22.dp))
                         .background(Brush.verticalGradient(listOf(Color(0xFF1B2F86), Color(0xFF0B1650), Color(0xFF240E5A))))
                         .clickable(onClick = onLyrics),
-                ) { lyrics(Modifier.fillMaxSize()) }
+                ) {
+                    lyrics(Modifier.fillMaxSize().padding(horizontal = 14.dp))
+                    if (onFullLyrics != null) IconButton(
+                        onFullLyrics,
+                        Modifier.align(Alignment.TopEnd).padding(6.dp).size(36.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.35f)),
+                    ) { Icon(PrismIcons.Fullscreen, "Lyrics full screen", tint = Color.White, modifier = Modifier.size(20.dp)) }
+                }
                 lyricsOptions?.let { Box(Modifier.padding(top = 8.dp)) { it() } }
             } else {
                 Artwork(
@@ -480,7 +523,7 @@ internal fun VelouraNowPlaying(
                 Text(clockOf(ui.durationMs), color = VelouraMuted, fontSize = 12.sp)
             }
             Card(
-                Modifier.fillMaxWidth().padding(top = 16.dp), colors = CardDefaults.cardColors(containerColor = Color.White),
+                Modifier.fillMaxWidth().padding(top = 16.dp), colors = CardDefaults.cardColors(containerColor = VelouraSurface),
                 shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(3.dp),
             ) {
                 Column(Modifier.clickable { onAutoMix(!ui.autoMixOn) }.padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -574,7 +617,7 @@ internal fun VelouraQueue(
                     }
                 }
             } else {
-                Card(Modifier.fillMaxWidth().padding(top = 14.dp), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+                Card(Modifier.fillMaxWidth().padding(top = 14.dp), colors = CardDefaults.cardColors(containerColor = VelouraSurface), shape = RoundedCornerShape(18.dp)) {
                     Column(Modifier.padding(16.dp)) {
                         Text("How this transition is planned", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 15.sp)
                         ui.planDetails.forEach { Text("• $it", Modifier.padding(top = 6.dp), color = VelouraMuted, fontSize = 13.sp) }
@@ -589,12 +632,12 @@ internal fun VelouraQueue(
 private fun NowPlayingPlanCard(ui: VelouraQueueUi) {
     val song = ui.current ?: return
     val total = ui.durationMs.coerceAtLeast(1).toFloat()
-    Card(Modifier.fillMaxWidth().padding(top = 14.dp), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(2.dp)) {
+    Card(Modifier.fillMaxWidth().padding(top = 14.dp), colors = CardDefaults.cardColors(containerColor = VelouraSurface), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(2.dp)) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Artwork(song.thumbnail, Modifier.size(60.dp), corner = 12.dp, seed = song.title.hashCode())
                 Column(Modifier.padding(horizontal = 12.dp).weight(1f)) {
-                    Text("Now Playing", Modifier.clip(RoundedCornerShape(8.dp)).background(Color(0xFFF1E8FF)).padding(horizontal = 7.dp, vertical = 2.dp), color = VelouraPurple, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("Now Playing", Modifier.clip(RoundedCornerShape(8.dp)).background(if (VelouraTheme.dark) Color(0xFF2E2350) else Color(0xFFF1E8FF)).padding(horizontal = 7.dp, vertical = 2.dp), color = VelouraPurple, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     Text(song.title, Modifier.padding(top = 3.dp), color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(song.artist, color = VelouraMuted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
@@ -628,7 +671,7 @@ private fun Mark(label: String, time: String, color: Color, modifier: Modifier) 
 
 @Composable
 private fun TransitionCard(ui: VelouraQueueUi, next: QueueSongUi) {
-    Card(Modifier.fillMaxWidth().padding(top = 12.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF5FF)), shape = RoundedCornerShape(18.dp)) {
+    Card(Modifier.fillMaxWidth().padding(top = 12.dp), colors = CardDefaults.cardColors(containerColor = VelouraTint), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("→  Transition to", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 15.sp)
@@ -662,7 +705,7 @@ private fun QueueRow(
 ) {
     var open by remember { mutableStateOf(false) }
     Row(
-        modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(14.dp)).background(if (held) Color(0xFFEAF1FB) else Color.White)
+        modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(14.dp)).background(if (held) VelouraTint else VelouraSurface)
             .clickable { onPlay(song) }.padding(horizontal = 6.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -741,6 +784,9 @@ internal fun VelouraMixSettings(
     onWeddingMode: () -> Unit = {},
     onTempoLock: (Int) -> Unit = {},
     onMoodAuto: (Boolean) -> Unit = {},
+    /** The app's look: 0 Auto (the phone's), 1 Light, 2 Dark. */
+    theme: Int = 0,
+    onTheme: (Int) -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SettingsCard {
@@ -809,6 +855,21 @@ internal fun VelouraMixSettings(
             }
         }
         SettingsCard {
+            Text("Theme", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+            Text("Auto follows your phone's dark mode.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp, bottom = 10.dp))
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(VelouraTint).padding(4.dp)) {
+                listOf("Auto", "Light", "Dark").forEachIndexed { i, label ->
+                    val on = theme == i
+                    Text(
+                        label,
+                        Modifier.weight(1f).clip(RoundedCornerShape(11.dp)).background(if (on) VelouraBlue else Color.Transparent)
+                            .clickable { onTheme(i) }.padding(vertical = 9.dp),
+                        color = if (on) Color.White else VelouraNavy, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+        SettingsCard {
             Text("Wedding & bhangra mode", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
             Text("One tap for a party: DJ · Club transitions, songs entering at their hook, mostly Punjabi & Hindi (85%), and the mix kept going.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
             Button(onWeddingMode, Modifier.padding(top = 10.dp), colors = ButtonDefaults.buttonColors(containerColor = VelouraOrange)) { Text("Turn on wedding mode") }
@@ -820,7 +881,7 @@ internal fun VelouraMixSettings(
                 val on = style == ui.style
                 Row(
                     Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(14.dp))
-                        .background(if (on) Color(0xFFEAF1FF) else Color.Transparent)
+                        .background(if (on) VelouraTint else Color.Transparent)
                         .border(1.dp, if (on) VelouraBlue else VelouraLine, RoundedCornerShape(14.dp))
                         .clickable { onStyle(style) }.padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -867,7 +928,7 @@ internal fun VelouraMixSettings(
 
 @Composable
 private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(1.dp)) {
+    Card(colors = CardDefaults.cardColors(containerColor = VelouraSurface), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(1.dp)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), content = content)
     }
 }
@@ -916,7 +977,7 @@ internal fun VelouraSimilar(
     Column(Modifier.fillMaxSize().background(VelouraBackground)) {
         VelouraTitleBar("More like this", PrismIcons.ArrowBack, "Back", onBack)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 20.dp)) {
-            Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(2.dp)) {
+            Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = VelouraSurface), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(2.dp)) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     Artwork(ui.seedThumbnail, Modifier.size(64.dp), corner = 14.dp, seed = ui.seedTitle.hashCode())
                     Column(Modifier.padding(start = 12.dp).weight(1f)) {
@@ -932,8 +993,8 @@ internal fun VelouraSimilar(
             }
             if (ui.progress != null) {
                 Text(ui.progress, Modifier.padding(top = 16.dp), color = VelouraNavy, fontSize = 14.sp)
-                if (ui.progressFraction != null) LinearProgressIndicator({ ui.progressFraction }, Modifier.fillMaxWidth().padding(top = 8.dp), color = VelouraBlue, trackColor = Color(0xFFDCE4EF))
-                else LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp), color = VelouraBlue, trackColor = Color(0xFFDCE4EF))
+                if (ui.progressFraction != null) LinearProgressIndicator({ ui.progressFraction }, Modifier.fillMaxWidth().padding(top = 8.dp), color = VelouraBlue, trackColor = VelouraTrack)
+                else LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp), color = VelouraBlue, trackColor = VelouraTrack)
             }
             ui.message?.let { Text(it, Modifier.padding(top = 14.dp), color = VelouraMuted, fontSize = 14.sp) }
             if (ui.rows.isNotEmpty()) {
@@ -955,7 +1016,7 @@ private fun Chip(text: String, color: Color) {
 @Composable
 private fun SimilarRow(r: SimilarRowUi, onPlay: (SimilarRowUi) -> Unit, onAdd: (SimilarRowUi) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(14.dp)).background(Color.White).clickable { onPlay(r) }.padding(10.dp),
+        Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(14.dp)).background(VelouraSurface).clickable { onPlay(r) }.padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Artwork(r.thumbnail, Modifier.size(52.dp), corner = 10.dp, seed = r.title.hashCode())
@@ -964,8 +1025,8 @@ private fun SimilarRow(r: SimilarRowUi, onPlay: (SimilarRowUi) -> Unit, onAdd: (
             Text(r.artist, color = VelouraMuted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 Chip(r.language, VelouraPurple)
-                r.bpm?.let { Chip(it, VelouraNavy) }
-                r.keyLabel?.let { Chip("Key $it", VelouraNavy) }
+                r.bpm?.let { Chip(it, Color(0xFF34466A)) }
+                r.keyLabel?.let { Chip("Key $it", Color(0xFF34466A)) }
             }
             r.why?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(top = 4.dp), color = VelouraMuted, fontSize = 11.sp, lineHeight = 14.sp) }
         }
@@ -1039,7 +1100,7 @@ internal fun VelouraParty(
                 Button(onStart, Modifier.padding(top = 16.dp), colors = ButtonDefaults.buttonColors(containerColor = VelouraBlue)) { Text("Start the party") }
                 Text("Only phones on the same Wi-Fi with the party's code can add songs; each phone one song every 20 seconds. You can take out any song and block a phone.", Modifier.padding(top = 14.dp), color = VelouraMuted, fontSize = 12.sp)
             } else {
-                Card(Modifier.padding(top = 14.dp), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(22.dp), elevation = CardDefaults.cardElevation(3.dp)) {
+                Card(Modifier.padding(top = 14.dp), colors = CardDefaults.cardColors(containerColor = VelouraSurface), shape = RoundedCornerShape(22.dp), elevation = CardDefaults.cardElevation(3.dp)) {
                     Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Scan to add songs", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 18.sp)
                         com.prism.music.ui.screens.QrCode(ui.link, Modifier.padding(top = 12.dp).size(220.dp))
@@ -1053,7 +1114,7 @@ internal fun VelouraParty(
             if (ui.added.isNotEmpty()) {
                 Text("Added by guests", Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 6.dp), color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 19.sp)
                 ui.added.forEach { a ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(14.dp)).background(Color.White).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(14.dp)).background(VelouraSurface).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                         Artwork(a.thumbnail, Modifier.size(46.dp), corner = 10.dp, seed = a.title.hashCode())
                         Column(Modifier.padding(horizontal = 11.dp).weight(1f)) {
                             Text(a.title, color = VelouraNavy, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1075,7 +1136,7 @@ data class SavedMixUi(val id: String, val name: String, val detail: String, val 
 @Composable
 internal fun SavedMixRow(m: SavedMixUi, onPlay: () -> Unit, onToYouTube: () -> Unit, onDelete: () -> Unit) {
     var open by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(16.dp)).background(Color.White).clickable(onClick = onPlay).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(16.dp)).background(VelouraSurface).clickable(onClick = onPlay).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
         // Up to four covers in a square, like a mix's own art.
         Box(Modifier.size(58.dp).clip(RoundedCornerShape(12.dp))) {
             val t = m.thumbnails.take(4)
@@ -1099,3 +1160,72 @@ internal fun SavedMixRow(m: SavedMixUi, onPlay: () -> Unit, onToYouTube: () -> U
     }
 }
 
+
+/**
+ * Lyrics full screen, as Spotify and Apple Music show them: the whole screen for the lines (large, the sung one lit word
+ * by word by Prism's karaoke panel), over the cover blurred into the song's colours, with the song and a small player
+ * at the bottom.
+ */
+@Composable
+internal fun VelouraFullLyrics(
+    title: String,
+    artist: String,
+    artwork: String?,
+    playing: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+    onClose: () -> Unit,
+    onPlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Long) -> Unit,
+    lyricsOptions: (@Composable () -> Unit)? = null,
+    /** Lyrics text smaller or larger (A− / A+); null hides the buttons. */
+    onTextSize: ((Int) -> Unit)? = null,
+    lyrics: @Composable (Modifier) -> Unit,
+) {
+    Box(Modifier.fillMaxSize().background(Color(0xFF0B1035))) {
+        // The cover, blurred and dimmed, gives the screen the song's own colours (blur needs Android 12; before it, dimmed).
+        Artwork(artwork, Modifier.fillMaxSize().blur(60.dp).alpha(0.55f), corner = 0.dp, seed = title.hashCode())
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x990B1035), Color(0x660B1035), Color(0xCC0B1035)))))
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClose) { Icon(PrismIcons.ChevronDown, "Close lyrics", tint = Color.White) }
+                Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+                    Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(artist, color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (onTextSize != null) {
+                    TextButton({ onTextSize(-1) }) { Text("A−", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+                    TextButton({ onTextSize(1) }) { Text("A+", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp) }
+                }
+                Artwork(artwork, Modifier.size(42.dp), corner = 8.dp, seed = title.hashCode())
+                Spacer(Modifier.width(8.dp))
+            }
+            lyrics(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 22.dp))
+            // (Its switches drawn for a dark ground, whatever the app's theme.)
+            lyricsOptions?.let { o ->
+                MaterialTheme(colorScheme = darkColorScheme(primary = VelouraBlue, secondaryContainer = Color(0x33FFFFFF), onSecondaryContainer = Color.White, onSurfaceVariant = Color.White.copy(alpha = 0.8f), outline = Color.White.copy(alpha = 0.35f))) {
+                    Box(Modifier.align(Alignment.CenterHorizontally).padding(top = 4.dp)) { o() }
+                }
+            }
+            Column(Modifier.padding(horizontal = 24.dp, vertical = 10.dp)) {
+                VelouraSeekBar(positionMs, durationMs, onSeek, light = true)
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(clockOf(positionMs), color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                    Text(clockOf(durationMs), color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onPrevious, Modifier.size(52.dp)) { Icon(PrismIcons.Previous, "Previous", tint = Color.White, modifier = Modifier.size(30.dp)) }
+                    Spacer(Modifier.width(22.dp))
+                    Box(
+                        Modifier.size(62.dp).clip(CircleShape).background(Color.White).clickable(onClick = onPlayPause),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(if (playing) PrismIcons.Pause else PrismIcons.Play, if (playing) "Pause" else "Play", tint = Color(0xFF0B1035), modifier = Modifier.size(30.dp)) }
+                    Spacer(Modifier.width(22.dp))
+                    IconButton(onNext, Modifier.size(52.dp)) { Icon(PrismIcons.Next, "Next", tint = Color.White, modifier = Modifier.size(30.dp)) }
+                }
+            }
+        }
+    }
+}
