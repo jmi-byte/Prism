@@ -26,8 +26,8 @@ android {
         applicationId = if (autoMixDjBuild) "com.jmibyte.veloura" else "com.prism.music"
         minSdk = 26
         targetSdk = 36
-        versionCode = if (autoMixDjBuild) 65 else 57
-        versionName = if (autoMixDjBuild) "0.4.1" else "1.8.2"
+        versionCode = if (autoMixDjBuild) 66 else 57
+        versionName = if (autoMixDjBuild) "0.4.2" else "1.8.2"
         vectorDrawables { useSupportLibrary = true }
         // The name under the launcher icon; a side-by-side build (below) is called "Prism Dev" so it can't be mistaken for Prism.
         manifestPlaceholders["appLabel"] = if (autoMixDjBuild) "Veloura" else "@string/app_name"
@@ -627,6 +627,11 @@ abstract class SplitTranslations : DefaultTask() {
     @get:InputFile @get:PathSensitive(PathSensitivity.RELATIVE) abstract val manifest: RegularFileProperty
     /** Strings the code hands to Android by id (Media3's download notification) or that the build names (app_name). */
     @get:Input abstract val kept: SetProperty<String>
+    /**
+     * The Veloura build's name for the labels Android reads itself (widgets, the tile, "Open Prism"): "Prism" as a word
+     * becomes this, as VelouraBranding does for the rest at run time (same pattern; its license strings stay). Empty: none.
+     */
+    @get:Input abstract val brand: Property<String>
     @get:OutputDirectory abstract val resDir: DirectoryProperty
     @get:OutputDirectory abstract val assetsDir: DirectoryProperty
 
@@ -644,6 +649,21 @@ abstract class SplitTranslations : DefaultTask() {
         val keep = kept.get().toMutableSet()
         src.walkTopDown().filter { it.isFile && it.extension == "xml" && !it.parentFile.name.startsWith("values") }
             .plus(manifest.get().asFile).forEach { f -> ref.findAll(f.readText()).forEach { keep += it.groupValues[1] } }
+
+        val brandName = brand.get()
+        val brandWord = Regex("(?<![\\w/@.-])Prism(?![\\w/-]|\\.\\w)")
+        val brandKeep = setOf("prism_is_free_software_under_the", "prism_s_license")
+        /** Brands the strings Android reads itself, in [d]; true if any changed. */
+        fun branded(d: org.w3c.dom.Document): Boolean {
+            if (brandName.isEmpty()) return false
+            var changed = false
+            elements(d, "string").filter { it.getAttribute("name") in keep && it.getAttribute("name") !in brandKeep }.forEach {
+                val t = it.textContent
+                val b = brandWord.replace(t, brandName)
+                if (b != t) { it.textContent = b; changed = true }
+            }
+            return changed
+        }
 
         val english = elements(parse(File(src, "values/strings.xml")), "string")
         val names = english.filter { it.getAttribute("translatable") != "false" }.map { it.getAttribute("name") }.filter { it !in keep }
@@ -671,6 +691,15 @@ abstract class SplitTranslations : DefaultTask() {
             val rel = f.relativeTo(src).path
             val folder = f.parentFile.name
             if (!(folder.startsWith("values-") && f.name == "strings.xml")) {
+                // English: kept whole (every language's fallback), with the Veloura build's labels branded.
+                if (rel.replace('\\', '/') == "values/strings.xml" && brandName.isNotEmpty()) {
+                    val d = parse(f)
+                    branded(d)
+                    File(outRes, rel).apply { parentFile.mkdirs() }.outputStream().use {
+                        transformer.transform(javax.xml.transform.dom.DOMSource(d), javax.xml.transform.stream.StreamResult(it))
+                    }
+                    return@forEach
+                }
                 f.copyTo(File(outRes, rel))
                 return@forEach
             }
@@ -679,6 +708,7 @@ abstract class SplitTranslations : DefaultTask() {
             val texts = elements(doc, "string").associate { it.getAttribute("name") to it.textContent }
             outAssets.resolve(qualifier).writeText(names.joinToString("\u0000") { texts[it] ?: "\u0001" })
             elements(doc, "string").filter { it.getAttribute("name") !in keep }.forEach { it.parentNode.removeChild(it) }
+            branded(doc)
             doc.documentElement.appendChild(doc.createElement("string").apply {
                 setAttribute("name", "prism_i18n_table")
                 textContent = qualifier
@@ -694,6 +724,7 @@ val splitTranslations = tasks.register<SplitTranslations>("splitTranslations") {
     res.set(layout.projectDirectory.dir("src/main/res"))
     manifest.set(layout.projectDirectory.file("src/main/AndroidManifest.xml"))
     kept.set(setOf("app_name", "downloads"))
+    brand.set(if (project.hasProperty("autoMixDj")) "Veloura" else "")
     resDir.set(layout.buildDirectory.dir("generated/i18n/res"))
     assetsDir.set(layout.buildDirectory.dir("generated/i18n/assets"))
 }

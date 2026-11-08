@@ -42,8 +42,12 @@ object Strings {
             val raw = String(bytes, t.starts[i], t.starts[i + 1] - t.starts[i] - 1, Charsets.UTF_8)
             if (raw == "\u0001") null else compile(raw)
         } ?: r.getString(id)
-        t.read[id] = s
-        return s
+        // The Veloura build's own name in Prism's text (the template, before any song title is put into it).
+        val shown = if (BuildConfig.AUTOMIX_DJ && runCatching { r.getResourceEntryName(id) }.getOrNull() !in VelouraBranding.KEEP) {
+            VelouraBranding.apply(s)
+        } else s
+        t.read[id] = shown
+        return shown
     }
 
     private fun load(r: Resources): Table {
@@ -97,7 +101,14 @@ object Strings {
 
     internal fun plural(id: Int, n: Int, args: Array<out Any?>): String {
         val with = if (args.isEmpty()) arrayOf<Any?>(n) else args
-        return android()?.let { r -> runCatching { r.getQuantityString(id, n, *with) }.getOrNull() }
+        return android()?.let { r ->
+            runCatching {
+                if (BuildConfig.AUTOMIX_DJ) {
+                    // Branded as a template, before the numbers or names are put in.
+                    String.format(r.configuration.locales[0], VelouraBranding.apply(r.getQuantityText(id, n).toString()), *with)
+                } else r.getQuantityString(id, n, *with)
+            }.getOrNull()
+        }
             ?: englishPlural(id, n).format(*with)
     }
 

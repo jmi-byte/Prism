@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Prism</string>
-    <string name="dj">DJ</string>
+    <string name="dj" translatable="false">DJ</string>
     <string name="tile_recognize">Recognize song</string>
     <string name="tile_play">Prism</string>
     <string name="downloads">Downloads</string>
@@ -4899,7 +4899,7 @@
     <string name="glass_on_more_of_the_screen">Glass on more of the screen</string>
     <string name="glass_on_more_of_the_screen_detail">Cards, chips, round buttons and the Undo bar</string>
     <string name="glass_on_more_of_the_screen_info">Cards and settings panels get a light falling on them and a brighter edge, chips and round buttons a brighter edge, and Frost reaches them all. They use no live blur, so they cost next to nothing, and they show on pages with a background behind them. The Undo bar is real glass while it\'s up. Performance mode turns this off. More places may follow.</string>
-    <string name="intelligent_auto_mix">Intelligent AutoMix</string>
-    <string name="intelligent_auto_mix_detail">Moves on after the song’s best part, at a safe phrase or beat</string>
-    <string name="intelligent_auto_mix_info">Experimental and off until you switch it on. Eligible songs play for at least two minutes; if Prism is unsure, the song plays normally. Videos, live streams, podcasts, albums playing through, Sing, casting and listening together are never shortened.</string>
+    <string name="intelligent_auto_mix" translatable="false">Intelligent AutoMix</string>
+    <string name="intelligent_auto_mix_detail" translatable="false">Moves on after the song’s best part, at a safe phrase or beat</string>
+    <string name="intelligent_auto_mix_info" translatable="false">Experimental and off until you switch it on. Eligible songs play for at least two minutes; if Prism is unsure, the song plays normally. Videos, live streams, podcasts, albums playing through, Sing, casting and listening together are never shortened.</string>
 </resources>

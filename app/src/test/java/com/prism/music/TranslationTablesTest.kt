@@ -52,6 +52,10 @@ class TranslationTablesLanguagesTest {
 
     private fun id(name: String) = R.string::class.java.getField(name).getInt(null)
 
+    /** What the app shows for [name]: the Veloura build says its own name where Prism's text says "Prism". */
+    private fun shown(name: String, text: String) =
+        if (BuildConfig.AUTOMIX_DJ && name !in VelouraBranding.KEEP) VelouraBranding.apply(text) else text
+
     @Test fun everyLanguageReadsItsOwnWords() {
         val ctx = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.app.Application>()
         val english = strings("values")
@@ -66,13 +70,13 @@ class TranslationTablesLanguagesTest {
                 // Every 40th string, and the ones a widget or the launcher shows (still resources).
                 val names = english.keys.filterIndexed { i, _ -> i % 40 == 0 } + listOf("widget_play", "tile_recognize", "downloads")
                 for (n in names) {
-                    val want = words[n]?.let(Strings::compile) ?: continue
+                    val want = words[n]?.let(Strings::compile)?.let { shown(n, it) } ?: continue
                     val got = tr(id(n))
                     if (got != want) problems += "$folder/$n: [$got], the translation is [$want]"
                 }
                 // Android's own read of a widget's label is translated too.
                 val label = Strings.resources!!.getString(R.string.widget_play)
-                if (label != words["widget_play"]?.let(Strings::compile)) problems += "$folder: the widget's label is [$label]"
+                if (label != words["widget_play"]?.let(Strings::compile)?.let { shown("widget_play", it) }) problems += "$folder: the widget's label is [$label]"
                 // Formatted in the language, as Android's getString(id, args) does.
                 if (!tr(R.string.couldn_t_load, "X").contains("X")) problems += "$folder: couldn_t_load lost its %1\$s"
             }

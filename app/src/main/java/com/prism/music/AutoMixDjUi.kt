@@ -608,6 +608,11 @@ private fun Account(c: AppContainer, onConnect: () -> Unit, onBack: () -> Unit) 
             Button(onConnect, Modifier.fillMaxWidth().padding(top = 22.dp)) { Text("Connect YouTube Music") }
         }
         TextButton(onBack, Modifier.padding(top = 10.dp)) { Text("Back to Home") }
+        // Veloura is built on Prism (GPL-3.0): the credit stays visible, and the license says how the source is shared.
+        Text(
+            "Veloura is built on Prism by Yigder, free software under the GNU GPL v3 or later.",
+            color = VelouraMuted, fontSize = 11.sp, modifier = Modifier.padding(top = 18.dp),
+        )
     }
 }
 

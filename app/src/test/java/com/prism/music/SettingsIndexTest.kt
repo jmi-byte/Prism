@@ -20,11 +20,21 @@ class SettingsIndexTest {
     private val strings: Map<String, String> by lazy {
         Regex("<string name=\"([^\"]+)\"[^>]*>(.*?)</string>", RegexOption.DOT_MATCHES_ALL)
             .findAll(File("src/main/res/values/strings.xml").readText())
-            .associate { it.groupValues[1] to I18nConvert.xmlUnescape(it.groupValues[2]) }
+            .associate { it.groupValues[1] to I18nConvert.xmlUnescape(it.groupValues[2]).let { t -> shown(it.groupValues[1], t) } }
     }
 
+    /** Setting rows shown only in the Veloura build. */
+    private val VELOURA_ONLY = setOf("intelligent_auto_mix")
+
+    /** What the app shows for [name]: the Veloura build says its own name where Prism's text says "Prism". */
+    private fun shown(name: String, text: String) =
+        if (BuildConfig.AUTOMIX_DJ && name !in VelouraBranding.KEEP) VelouraBranding.apply(text) else text
+
     private fun rows(calls: String) = sources.flatMap { src ->
-        Regex("""\b(?:$calls)\(\s*tr\(R\.string\.(\w+)""").findAll(src).map { m ->
+        Regex("""\b(?:$calls)\(\s*tr\(R\.string\.(\w+)""").findAll(src)
+            // Rows only the Veloura build shows (behind BuildConfig.AUTOMIX_DJ) are only listed there.
+            .filter { BuildConfig.AUTOMIX_DJ || it.groupValues[1] !in VELOURA_ONLY }
+            .map { m ->
             // "Space to use: %1$s" is listed by its fixed start.
             strings.getValue(m.groupValues[1]).substringBefore("%1\$s").trim().removeSuffix(":")
         }.toList()
