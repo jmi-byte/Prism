@@ -14,16 +14,17 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * A DJ mixer's bass knob for one player: [setBass] 1 leaves the sound untouched, 0 cuts the low end (a low shelf
- * around [BassKill.CORNER_HZ], [BassKill.CUT_DB] down), and the level glides between them over a few tens of
- * milliseconds so the swap never clicks. At 1, once settled, the audio passes straight through.
- *
- * Mix's bass swap uses one on each player: the incoming song comes in with its bass cut, then on a downbeat the two
- * swap, so the two low ends are never heard on top of each other.
+ * A DJ mixer's channel EQ for one player, with two knobs that glide so they never click, and a true pass-through
+ * while both are at rest:
+ * - [setBass]: 1 leaves the sound untouched, 0 cuts the low end (a low shelf around [BassKill.CORNER_HZ],
+ *   [BassKill.CUT_DB] down). Mix's bass swap: the incoming song comes in with its bass cut, then the two swap on a beat.
+ * - [setLowPass]: a sweepable low-pass filter ([SweepFilter]); at [SweepFilter.OPEN_HZ] or above it is off. Mix's
+ *   filter sweep: the outgoing song's highs roll away as it leaves, while the incoming one opens up.
  */
 @UnstableApi
-class BassSwapProcessor : BaseAudioProcessor() {
+class DjEqProcessor : BaseAudioProcessor() {
     private val kill = BassKill()
+    private val sweep = SweepFilter()
     private var float = false
     private var channels = 2
     /** Reused between buffers: nothing is allocated on the audio thread once it's big enough. */
@@ -34,12 +35,16 @@ class BassSwapProcessor : BaseAudioProcessor() {
 
     val bass: Float get() = kill.target
 
+    /** The low-pass filter's cutoff in Hz; [SweepFilter.OPEN_HZ] (or more) switches it off. Safe from any thread. */
+    fun setLowPass(hz: Float) = sweep.setTarget(hz)
+
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         val enc = inputAudioFormat.encoding
         if (enc != C.ENCODING_PCM_16BIT && enc != C.ENCODING_PCM_FLOAT) return AudioProcessor.AudioFormat.NOT_SET
         float = enc == C.ENCODING_PCM_FLOAT
         channels = inputAudioFormat.channelCount.coerceAtLeast(1)
         kill.configure(inputAudioFormat.sampleRate, channels)
+        sweep.configure(inputAudioFormat.sampleRate, channels)
         return inputAudioFormat
     }
 
@@ -47,7 +52,7 @@ class BassSwapProcessor : BaseAudioProcessor() {
         val bytes = inputBuffer.remaining()
         if (bytes == 0) return
         val out = replaceOutputBuffer(bytes)
-        if (kill.idle) {
+        if (kill.idle && sweep.idle) {
             out.put(inputBuffer)
             out.flip()
             return
@@ -57,6 +62,7 @@ class BassSwapProcessor : BaseAudioProcessor() {
         val buf = scratch
         for (i in 0 until samples) buf[i] = if (float) inputBuffer.float else inputBuffer.short / 32768f
         kill.process(buf, samples / channels)
+        sweep.process(buf, samples / channels)
         for (i in 0 until samples) {
             if (float) out.putFloat(buf[i])
             else out.putShort((buf[i].coerceIn(-1f, 0.99997f) * 32767f).roundToInt().toShort())
@@ -65,8 +71,101 @@ class BassSwapProcessor : BaseAudioProcessor() {
         out.flip()
     }
 
-    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) = kill.clearHistory()
-    override fun onReset() = kill.clearHistory()
+    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) { kill.clearHistory(); sweep.clearHistory() }
+    override fun onReset() { kill.clearHistory(); sweep.clearHistory() }
+}
+
+/**
+ * The sweep's sound, apart from Media3 so it can be unit-tested: a 2nd-order low-pass biquad (RBJ cookbook) per
+ * channel, with a touch of resonance ([Q]) for the familiar "whoosh" of a DJ filter. The cutoff glides on a log scale
+ * (so a sweep sounds even), and the coefficients follow every [BLOCK] frames while it moves.
+ */
+class SweepFilter {
+    @Volatile var target = OPEN_HZ
+        private set
+    private var hz = OPEN_HZ
+    private var rate = 48_000
+    private var channels = 2
+    private var x1 = DoubleArray(2); private var x2 = DoubleArray(2)
+    private var y1 = DoubleArray(2); private var y2 = DoubleArray(2)
+    private var b0 = 1.0; private var b1 = 0.0; private var b2 = 0.0; private var a1 = 0.0; private var a2 = 0.0
+    private var coefFor = Float.NaN
+    private var primed = false
+
+    fun configure(sampleRate: Int, channelCount: Int) {
+        rate = sampleRate.coerceAtLeast(8_000)
+        channels = channelCount.coerceAtLeast(1)
+        x1 = DoubleArray(channels); x2 = DoubleArray(channels); y1 = DoubleArray(channels); y2 = DoubleArray(channels)
+        coefFor = Float.NaN
+        primed = false
+    }
+
+    fun setTarget(v: Float) { target = v.coerceIn(MIN_HZ, OPEN_HZ) }
+
+    /** Open and settled: nothing to do. */
+    val idle: Boolean get() = target >= OPEN_HZ && hz >= OPEN_HZ
+
+    fun clearHistory() {
+        x1.fill(0.0); x2.fill(0.0); y1.fill(0.0); y2.fill(0.0)
+        primed = false
+    }
+
+    fun process(buf: FloatArray, frames: Int) {
+        if (idle) return
+        if (!primed && frames > 0) {
+            // Coming out of pass-through: start the filter as if it had always been running on this signal, so its
+            // first samples don't jump from silence (a click).
+            for (ch in 0 until channels) { val v = buf[ch].toDouble(); x1[ch] = v; x2[ch] = v; y1[ch] = v; y2[ch] = v }
+            primed = true
+        }
+        val glide = 1.0 - exp(-1.0 / (GLIDE_SEC * rate))
+        var f = 0
+        while (f < frames) {
+            val n = minOf(BLOCK, frames - f)
+            // Gliding in log frequency: an octave takes as long at 200 Hz as at 10 kHz.
+            val goal = kotlin.math.ln(target.toDouble())
+            val now = kotlin.math.ln(hz.toDouble())
+            val next = if (kotlin.math.abs(goal - now) < 1e-3) goal else now + (goal - now) * (1 - (1 - glide).pow(n))
+            hz = exp(next).toFloat().let { if (target >= OPEN_HZ && it > OPEN_HZ * 0.995f) OPEN_HZ else it }
+            if (hz != coefFor) coefficients(hz)
+            for (k in 0 until n) {
+                val base = (f + k) * channels
+                for (ch in 0 until channels) {
+                    val x = buf[base + ch].toDouble()
+                    val y = b0 * x + b1 * x1[ch] + b2 * x2[ch] - a1 * y1[ch] - a2 * y2[ch]
+                    x2[ch] = x1[ch]; x1[ch] = x
+                    y2[ch] = y1[ch]; y1[ch] = y
+                    buf[base + ch] = y.toFloat()
+                }
+            }
+            f += n
+        }
+        if (idle) clearHistory()
+    }
+
+    private fun coefficients(cutoff: Float) {
+        coefFor = cutoff
+        // Never above 45% of the sample rate, where the filter would be unstable.
+        val w0 = 2 * PI * minOf(cutoff.toDouble(), rate * 0.45) / rate
+        val cw = cos(w0)
+        val alpha = sin(w0) / (2 * Q)
+        val a0 = 1 + alpha
+        b0 = (1 - cw) / 2 / a0
+        b1 = (1 - cw) / a0
+        b2 = b0
+        a1 = -2 * cw / a0
+        a2 = (1 - alpha) / a0
+    }
+
+    companion object {
+        /** At or above this the filter is off (the top of hearing). */
+        const val OPEN_HZ = 20_000f
+        const val MIN_HZ = 80f
+        /** Slightly resonant (Butterworth is 0.707): the sweep is heard as a sweep, without whistling. */
+        private const val Q = 0.9
+        private const val GLIDE_SEC = 0.05
+        private const val BLOCK = 64
+    }
 }
 
 /**

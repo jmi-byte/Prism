@@ -355,7 +355,11 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
             !settings.mixAuto -> "${settings.mixSeconds} s blend"
             plan.estimated -> "Longer blend"
             else -> "Short blend"
-        }}${if (settings.sound.djEffects) " · Bass swap" else ""}"
+        }}${when {
+            !settings.sound.djEffects -> ""
+            settings.sound.djFilter -> " · Bass swap + filter"
+            else -> " · Bass swap"
+        }}"
         next == null -> "Add another song for a transition"
         exactDecision != null -> "Analysis complete — no safe early cue for this pair"
         else -> "Analysing the current and next song…"
@@ -493,6 +497,12 @@ private fun MixSettings(c: AppContainer) {
                     "Bass swap: the next song comes in with its bass cut, then the two swap bass on a beat halfway through, so the low ends never pile up. Off: plain crossfades.",
                     settings.sound.djEffects,
                 ) { c.settings.setDjEffects(it) }
+                if (settings.sound.djEffects) SwitchRow(
+                    "Filter sweep",
+                    "The outgoing song's highs roll away as it leaves, while the next song opens up from muffled to full. Best with a crossfade of 6 s or more.",
+                    settings.sound.djFilter,
+                    Modifier.padding(top = 12.dp),
+                ) { c.settings.setDjFilter(it) }
             }
         }
         item {

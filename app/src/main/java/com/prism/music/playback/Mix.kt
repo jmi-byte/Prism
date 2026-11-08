@@ -19,6 +19,7 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.ln
+import kotlin.math.pow
 import kotlin.math.sin
 
 /**
@@ -58,7 +59,7 @@ class MixEngine(
     /** Scans a song from what's on the phone (no network), if it hasn't been ([MixTempo.measure]). */
     private val scanFromPhone: (String) -> Unit,
     /** A second player for the ending song: same sources and effects as the main one (plus [ShiftProcessor] first), no audio focus. */
-    private val buildTail: (ShiftProcessor, BassSwapProcessor?) -> ExoPlayer,
+    private val buildTail: (ShiftProcessor, DjEqProcessor?) -> ExoPlayer,
     /** A blend is over (done or stopped) and the main player is back to normal: the listener's own speed can return. */
     private val onSettled: () -> Unit = {},
     /** The pitch the music plays at (Sing's key, Reddit R6): blends change the speed only, never the key. */
@@ -75,10 +76,12 @@ class MixEngine(
     private val earlyEstimated: (from: MediaItem, to: MediaItem) -> Boolean = { _, _ -> false },
     /** The listener's crossfade length for mid-song blends, in ms; null leaves it automatic. */
     private val earlyLength: () -> Long? = { null },
-    /** The main player's bass knob ([BassSwapProcessor]); null where the build has no DJ effects. */
-    private val mainBass: BassSwapProcessor? = null,
+    /** The main player's bass knob ([DjEqProcessor]); null where the build has no DJ effects. */
+    private val mainBass: DjEqProcessor? = null,
     /** DJ effects are on: blends swap the two songs' bass on a beat. */
     private val bassSwap: () -> Boolean = { false },
+    /** DJ effects' filter sweep is on: the ending song's highs roll away as it leaves, the next one opens up. */
+    private val filterSweep: () -> Boolean = { false },
 ) {
     /** The main player at [speed], in the music's key. */
     private fun at(speed: Float) = PlaybackParameters(speed, pitch())
@@ -118,10 +121,12 @@ class MixEngine(
     private var settleStartedAt = 0L
     private var noPlanFor: String? = null
     /** The ending song's bass knob, on the tail player; null with no tail or no DJ effects. */
-    private var tailBass: BassSwapProcessor? = null
+    private var tailBass: DjEqProcessor? = null
     /** This blend swaps bass, and whether it has swapped yet. */
     private var swapping = false
     private var swapped = false
+    /** This blend sweeps the two songs' filters. */
+    private var sweeping = false
     private var retryFor: String? = null
     private var retryCount = 0
     private var lastSyncLog = 0L
@@ -245,7 +250,7 @@ class MixEngine(
         state.mark.value = BlendMark(p.fromId, p.startMs, p.lengthMs)
         if (main.currentPosition < p.startMs - LEAD_MS - PREPARE_MS - 3000) return 250
         val shift = ShiftProcessor()
-        val bass = mainBass?.let { BassSwapProcessor() }
+        val bass = mainBass?.let { DjEqProcessor() }
         tailBass = bass
         val t = buildTail(shift, bass)
         shifter = shift
@@ -507,6 +512,8 @@ class MixEngine(
         swapping = mainBass != null && tailBass != null && bassSwap()
         swapped = false
         if (swapping) { mainBass?.setBass(0f); tailBass?.setBass(1f) }
+        sweeping = mainBass != null && tailBass != null && filterSweep()
+        if (sweeping) sweepHz(0f, p.swapAt).let { (incoming, outgoing) -> mainBass?.setLowPass(incoming); tailBass?.setLowPass(outgoing) }
         main.seekTo(p.toIndex, p.inMs)
         main.playbackParameters = at(p.ratio)
         // The next song's bar grows in over the blend, in its own time (faster or slower by the tempo match).
@@ -569,6 +576,10 @@ class MixEngine(
             mainBass?.setBass(1f)
             tailBass?.setBass(0f)
             note("bass swapped at %.2f of the blend".format(progress))
+        }
+        if (sweeping) sweepHz((progress + SWAP_LEAD_MS.toFloat() / p.lengthMs).coerceAtMost(1f), p.swapAt).let { (incoming, outgoing) ->
+            mainBass?.setLowPass(incoming)
+            tailBass?.setLowPass(outgoing)
         }
         state.blend.value = BlendNow(p.fromId, p.toId, progress)
         if (p.beats && t.isPlaying) alignBeats(p, t, progress)
@@ -644,11 +655,13 @@ class MixEngine(
         return 100
     }
 
-    /** The main player always ends a blend (done, stopped or skipped) with its full bass. */
+    /** The main player always ends a blend (done, stopped or skipped) with its full bass and its filter open. */
     private fun restoreBass() {
         swapping = false
         swapped = false
+        sweeping = false
         mainBass?.setBass(1f)
+        mainBass?.setLowPass(SweepFilter.OPEN_HZ)
     }
 
     private fun finish() {
@@ -727,6 +740,27 @@ class MixEngine(
             } ?: half
             return (at / lengthMs).toFloat().coerceIn(0.2f, 0.8f)
         }
+
+        /**
+         * The filter sweep at [progress] (0..1) through a blend that swaps bass at [swapAt]: the low-pass cutoffs
+         * (Hz) for the incoming and the outgoing song. The incoming song starts muffled ([SWEEP_IN_FROM_HZ]) and
+         * opens fully by the swap; the outgoing one stays open for the first [SWEEP_OUT_AFTER] of the blend, then its
+         * highs roll away evenly (in octaves) down to [SWEEP_OUT_TO_HZ] at the end.
+         */
+        fun sweepHz(progress: Float, swapAt: Float): Pair<Float, Float> {
+            val p = progress.coerceIn(0f, 1f)
+            val open = SweepFilter.OPEN_HZ
+            val incoming = if (swapAt <= 0f || p >= swapAt) open
+                else (SWEEP_IN_FROM_HZ * (open / SWEEP_IN_FROM_HZ).toDouble().pow((p / swapAt).toDouble())).toFloat()
+            val t = ((p - SWEEP_OUT_AFTER) / (1f - SWEEP_OUT_AFTER)).coerceIn(0f, 1f)
+            val outgoing = if (t <= 0f) open
+                else (open * (SWEEP_OUT_TO_HZ / open).toDouble().pow(t.toDouble())).toFloat()
+            return incoming to outgoing
+        }
+
+        private const val SWEEP_IN_FROM_HZ = 2_500f
+        private const val SWEEP_OUT_AFTER = 0.2f
+        private const val SWEEP_OUT_TO_HZ = 300f
 
         /** About how far ahead of the speaker the audio chain works: the swap is turned this much early. */
         private const val SWAP_LEAD_MS = 120L

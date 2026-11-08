@@ -105,7 +105,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     private val muteWatch by lazy { MuteWatch(this, player) { c.settings.current.behavior.pauseOnMute } }
     private val normalizer = NormalizerProcessor()
     /** Veloura's DJ effects: the main player's bass knob, turned by Mix during a bass swap. */
-    private val mainBass = BassSwapProcessor()
+    private val mainBass = DjEqProcessor()
     private var songLoudness: Float? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -412,6 +412,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             earlyLength = { c.settings.current.let { s -> if (s.mixAuto) null else s.mixSeconds * 1000L } },
             mainBass = mainBass.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ },
             bassSwap = { com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.sound.djEffects },
+            filterSweep = { com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.sound.let { it.djEffects && it.djFilter } },
         ).also { it.start() }
         // Prism Connect: the speaker or TV being cast to plays what this player plays, and its volume is the session's.
         sessionPlayer.remote = object : LyricsOverlayPlayer.Remote {
@@ -526,7 +527,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
      * effects (spatial audio, the ending song's normalization, and the equalizer through the shared audio
      * session), and no audio focus of its own.
      */
-    private fun buildTailPlayer(shift: ShiftProcessor, bass: BassSwapProcessor?): ExoPlayer {
+    private fun buildTailPlayer(shift: ShiftProcessor, bass: DjEqProcessor?): ExoPlayer {
         val s = c.settings.current
         val tailSpatial = SpatialAudioProcessor().apply { configure(s.spatial, s.spatialAmount) }
         val tailNormalizer = NormalizerProcessor().apply { setGainDb(normalizeGainDb) }

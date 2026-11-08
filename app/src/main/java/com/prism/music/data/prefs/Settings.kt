@@ -706,6 +706,8 @@ data class SoundPrefs(
     val crossfadeCurve: CrossfadeCurve = CrossfadeCurve.EQUAL_POWER,
     /** Veloura's DJ effects in every blend: a bass swap on a beat (the two low ends never play over each other). */
     val djEffects: Boolean = true,
+    /** With [djEffects]: the filter sweep (the ending song's highs roll away as it leaves, the next one opens up). */
+    val djFilter: Boolean = true,
     /** Normalize volume's level, in LUFS (A2). */
     val normalizeTarget: Int = -14,
     /** An album playing through keeps its own song-to-song levels: one level for the whole album (A2). */
@@ -1874,6 +1876,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val mix = booleanPreferencesKey("mix")
         val intelligentAutoMix = booleanPreferencesKey("intelligent_auto_mix")
         val djEffects = booleanPreferencesKey("veloura_dj_effects")
+        val djFilter = booleanPreferencesKey("veloura_dj_filter")
         val mixSeconds = intPreferencesKey("mix_seconds")
         val mixAuto = booleanPreferencesKey("mix_auto")
         val mixBeatMatch = booleanPreferencesKey("mix_beat_match")
@@ -2547,6 +2550,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
             sound = SoundPrefs(
                 crossfadeCurve = p.enum(K.crossfadeCurve, d.sound.crossfadeCurve),
                 djEffects = p[K.djEffects] ?: d.sound.djEffects,
+                djFilter = p[K.djFilter] ?: d.sound.djFilter,
                 normalizeTarget = (p[K.normalizeTarget] ?: d.sound.normalizeTarget).coerceIn(-30, -5),
                 normalizeAlbums = p[K.normalizeAlbums] ?: d.sound.normalizeAlbums,
                 musicSpeed = (p[K.musicSpeedDefault] ?: d.sound.musicSpeed).coerceIn(0.5f, 2f),
@@ -3000,6 +3004,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
     fun setMix(v: Boolean) = edit { it[K.mix] = v }
     fun setIntelligentAutoMix(v: Boolean) = edit { it[K.intelligentAutoMix] = v }
     fun setDjEffects(v: Boolean) = edit { it[K.djEffects] = v }
+    fun setDjFilter(v: Boolean) = edit { it[K.djFilter] = v }
     fun setMixSeconds(v: Int) = edit { it[K.mixSeconds] = v.coerceIn(1, MAX_CROSSFADE_SECONDS) }
     fun setMixAuto(v: Boolean) = edit { it[K.mixAuto] = v }
     fun setMixBeatMatch(v: Boolean) = edit { it[K.mixBeatMatch] = v }
