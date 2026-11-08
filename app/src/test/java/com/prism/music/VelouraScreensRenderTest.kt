@@ -43,8 +43,9 @@ class VelouraScreensRenderTest {
         val dir = File("build/veloura-previews").apply { mkdirs() }
         File(dir, "$name.png").outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         // Not blank: the screen drew something other than its background.
-        val colors = (0 until 40).map { bmp.getPixel(bmp.width * (it % 8 + 1) / 9, bmp.height * (it / 8 + 1) / 6) }.toSet()
-        assertTrue("$name drew", colors.size > 3)
+        val colors = HashSet<Int>()
+        for (y in 0 until bmp.height step 9) for (x in 0 until bmp.width step 9) colors += bmp.getPixel(x, y)
+        assertTrue("$name drew", colors.size > 20)
     }
 
     private val sample = VelouraQueueUi(
@@ -92,6 +93,29 @@ class VelouraScreensRenderTest {
 
     @Test fun queue() = shoot("queue") {
         VelouraQueue(sample, 0, {}, {}, emptyList(), {}, {}, {}, {})
+    }
+
+    @Test fun mixSettings() = shoot("mix-settings") {
+        Column(Modifier.fillMaxSize()) {
+            VelouraTitleBar("Mix Settings", com.prism.music.ui.theme.PrismIcons.ArrowBack, "Back", {})
+            Box(Modifier.weight(1f)) {
+                VelouraMixSettings(VelouraMixSettingsUi(true, TransitionStyle.DJ_AUTO, true, 6, 12), {}, {}, {}, {})
+            }
+        }
+    }
+
+    @Test fun transitionStylesMapToTheSettings() {
+        // One choice over two stored settings: crossfade is DJ effects off, whatever style was last picked.
+        assertTrue(TransitionStyle.of(false, com.prism.music.data.prefs.DjStyle.CLUB) == TransitionStyle.CROSSFADE)
+        com.prism.music.data.prefs.DjStyle.entries.forEach { s ->
+            val t = TransitionStyle.of(true, s)
+            assertTrue("$s", t.dj == s)
+        }
+        assertTrue(TransitionStyle.entries.size == com.prism.music.data.prefs.DjStyle.entries.size + 1)
+        assertTrue(transitionLength(false, 9, true, false) == "9 s")
+        assertTrue(transitionLength(true, 9, true, false) == "~8 s")
+        assertTrue(transitionLength(true, 9, false, true) == "~6 s")
+        assertTrue(transitionLength(true, 9, false, false) == "~3 s")
     }
 
     @Test fun queuePlan() = shoot("queue-plan") {

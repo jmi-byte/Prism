@@ -271,12 +271,9 @@ private fun autoMixStatus(c: AppContainer, songId: String?, nextId: String?, pos
             append("Next mix in ~${clockOf((plan.transitionAtMs - position).coerceAtLeast(0))} · ")
             append(plan.boundary.label())
             append(" · ")
-            append(when {
-                !settings.mixAuto -> "${settings.mixSeconds} s blend"
-                plan.estimated -> "Longer blend"
-                else -> "Smooth blend"
-            })
-            if (settings.sound.djEffects) append(" · DJ: ${settings.sound.djStyle.label}")
+            append(TransitionStyle.of(settings.sound.djEffects, settings.sound.djStyle).label)
+            append(" · ")
+            append(transitionLength(settings.mixAuto, settings.mixSeconds, settings.sound.djEffects, plan.estimated))
         }
         nextId == null -> "Add another song for a transition"
         exact != null -> "Analysis complete · no mid-song cue for this pair"
@@ -396,9 +393,10 @@ private fun QueueScreen(c: AppContainer, onBack: () -> Unit, menu: List<Pair<Str
                 }}${if (plan.reason == com.prism.music.playback.AutoMixReason.HIGHLIGHT_HEARD) ", after its highlight" else ""}.")
                 add(if (plan.entryAtMs > 0) "The next song comes in at ${clockOf(plan.entryAtMs)}${if (plan.entryEstimated) " (best guess)" else ""}." else "The next song starts from its opening.")
             }
-            add(if (settings.mixAuto) "Blend length: automatic." else "Blend length: ${settings.mixSeconds} s.")
+            add("Transition: ${TransitionStyle.of(settings.sound.djEffects, settings.sound.djStyle).label}, " +
+                "${transitionLength(settings.mixAuto, settings.mixSeconds, settings.sound.djEffects, plan?.estimated == true)}" +
+                (if (settings.mixAuto) " (automatic)." else "."))
             add(if (matched) "Beats lined up: both tempos are clear and close." else "Beats not lined up: a plain blend.")
-            add(if (settings.sound.djEffects) "DJ effects: ${settings.sound.djStyle.label}." else "DJ effects: off.")
         },
         upNext = coming.map(::row),
     )
@@ -487,95 +485,27 @@ private fun Search(c: AppContainer, onPlayed: () -> Unit) {
 @Composable
 private fun MixSettings(c: AppContainer) {
     val settings by c.settings.flow.collectAsState()
-    LazyColumn(contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            SettingCard {
-                SwitchRow(
-                    "Intelligent AutoMix",
-                    "Leave each song partway through and bring the next one in at a good moment. Off: songs play in full, one after another.",
-                    settings.intelligentAutoMix,
-                ) { on ->
-                    c.settings.setIntelligentAutoMix(on)
-                    // AutoMix runs its own blends; Prism's separate Crossfade and DJ mode would compete with it.
-                    if (on) { c.settings.setMix(false); c.dj.setOn(false) }
-                }
-            }
-        }
-        item {
-            SettingCard {
-                SwitchRow(
-                    "DJ effects",
-                    "Mix like a DJ: bass swaps, filter sweeps and echo outs, timed to the beat. Off: plain crossfades.",
-                    settings.sound.djEffects,
-                ) { c.settings.setDjEffects(it) }
-                if (settings.sound.djEffects) {
-                    Text("Style", color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.padding(top = 14.dp))
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFFE9F2FE)).padding(4.dp),
-                    ) {
-                        com.prism.music.data.prefs.DjStyle.entries.forEach { style ->
-                            SegmentButton(style.label, settings.sound.djStyle == style, Modifier.weight(1f)) { c.settings.setDjStyle(style) }
-                        }
-                    }
-                    Text(settings.sound.djStyle.detail, color = VelouraMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
-                    Text("DJ effects are easiest to hear with a crossfade of 6 s or more.", color = VelouraMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-                }
-            }
-        }
-        item {
-            SettingCard {
-                Text("Crossfade length", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
-                Text(
-                    "How long the two songs overlap at each transition.",
-                    color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp),
-                )
-                SwitchRow(
-                    "Automatic",
-                    "Veloura picks the length per pair: about 3 s at a clear phrase or beat, about 6 s at a best-guess point, whole bars when the beats line up.",
-                    settings.mixAuto,
-                    Modifier.padding(top = 10.dp),
-                ) { c.settings.setMixAuto(it) }
-                val seconds = settings.mixSeconds.coerceIn(1, CROSSFADE_SLIDER_MAX)
-                Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Fixed length", color = if (settings.mixAuto) VelouraMuted else VelouraNavy, modifier = Modifier.weight(1f))
-                    Text("$seconds s", color = if (settings.mixAuto) VelouraMuted else VelouraBlue, fontWeight = FontWeight.Black)
-                }
-                Slider(
-                    seconds.toFloat(), { c.settings.setMixSeconds(kotlin.math.round(it).toInt()) },
-                    enabled = !settings.mixAuto,
-                    valueRange = 1f..CROSSFADE_SLIDER_MAX.toFloat(), steps = CROSSFADE_SLIDER_MAX - 2,
-                )
-                Text(
-                    if (settings.mixAuto) "Turn off Automatic to choose your own length."
-                    else "Used for every transition, rounded to whole bars when both songs have a clear beat. A blend never takes more than a third of either song.",
-                    color = VelouraMuted, fontSize = 12.sp,
-                )
-            }
-        }
-    }
+    VelouraMixSettings(
+        VelouraMixSettingsUi(
+            autoMix = settings.intelligentAutoMix,
+            style = TransitionStyle.of(settings.sound.djEffects, settings.sound.djStyle),
+            automaticLength = settings.mixAuto,
+            seconds = settings.mixSeconds.coerceIn(1, CROSSFADE_SLIDER_MAX),
+            maxSeconds = CROSSFADE_SLIDER_MAX,
+        ),
+        onAutoMix = { autoMixOn(c, it) },
+        onStyle = { style ->
+            c.settings.setDjEffects(style.dj != null)
+            style.dj?.let(c.settings::setDjStyle)
+        },
+        onAutomaticLength = { c.settings.setMixAuto(it) },
+        onSeconds = { c.settings.setMixSeconds(it) },
+    )
 }
 
 private const val CROSSFADE_SLIDER_MAX = 12
 /** How close a planned blend must be before the DJ tab counts down to it. */
 private const val MIX_SOON_MS = 6_000L
-
-@Composable
-private fun SettingCard(content: @Composable ColumnScope.() -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp)) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), content = content)
-    }
-}
-
-@Composable
-private fun SwitchRow(title: String, detail: String, checked: Boolean, modifier: Modifier = Modifier, onChange: (Boolean) -> Unit) {
-    Row(modifier.fillMaxWidth().clickable { onChange(!checked) }, verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-            Text(detail, color = VelouraMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
-        }
-        Switch(checked, onChange)
-    }
-}
 
 @Composable
 private fun Account(c: AppContainer, onConnect: () -> Unit, onBack: () -> Unit) {

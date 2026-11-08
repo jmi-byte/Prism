@@ -638,3 +638,117 @@ private fun QueueRow(
         }
     }
 }
+
+// ---- Mix Settings ----
+
+/**
+ * How one song becomes the next: a plain crossfade, or one of the DJ styles. One choice, because a blend is one or the
+ * other (a DJ blend replaces the crossfade's volume fade with its own, see MixEngine.djGains). Stored as SoundPrefs'
+ * djEffects (off for [CROSSFADE]) and djStyle.
+ */
+enum class TransitionStyle(val label: String, val detail: String, val dj: com.prism.music.data.prefs.DjStyle?) {
+    CROSSFADE("Crossfade", "A plain, smooth fade from one song into the next. No effects.", null),
+    DJ_AUTO("DJ · Auto", "Picks per pair: Club when the beats can be lined up, Echo out when they can't.", com.prism.music.data.prefs.DjStyle.AUTO),
+    DJ_CLUB("DJ · Club", "Bass swap and filter sweep: the old song's highs roll away as the new one opens up.", com.prism.music.data.prefs.DjStyle.CLUB),
+    DJ_SMOOTH("DJ · Smooth", "Bass swap only: subtle, best on headphones or speakers with bass.", com.prism.music.data.prefs.DjStyle.SMOOTH),
+    DJ_ECHO("DJ · Echo out", "The old song is thrown into a beat-timed echo and trails away as the new one comes in.", com.prism.music.data.prefs.DjStyle.ECHO);
+
+    companion object {
+        fun of(djEffects: Boolean, style: com.prism.music.data.prefs.DjStyle): TransitionStyle =
+            if (!djEffects) CROSSFADE else entries.first { it.dj == style }
+    }
+}
+
+/** A transition's length in words: the chosen seconds, or about how long Automatic makes it for this style. */
+fun transitionLength(automatic: Boolean, seconds: Int, dj: Boolean, estimated: Boolean): String = when {
+    !automatic -> "$seconds s"
+    dj -> "~8 s"
+    estimated -> "~6 s"
+    else -> "~3 s"
+}
+
+data class VelouraMixSettingsUi(
+    val autoMix: Boolean,
+    val style: TransitionStyle,
+    val automaticLength: Boolean,
+    val seconds: Int,
+    val maxSeconds: Int,
+)
+
+@Composable
+internal fun VelouraMixSettings(
+    ui: VelouraMixSettingsUi,
+    onAutoMix: (Boolean) -> Unit,
+    onStyle: (TransitionStyle) -> Unit,
+    onAutomaticLength: (Boolean) -> Unit,
+    onSeconds: (Int) -> Unit,
+) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SettingsCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text("Intelligent AutoMix", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                    Text("Leave each song partway through and bring the next one in at a good moment. Off: songs play in full, one after another.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
+                }
+                Switch(ui.autoMix, onAutoMix, colors = SwitchDefaults.colors(checkedTrackColor = VelouraBlue))
+            }
+        }
+        SettingsCard {
+            Text("Transition style", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+            Text("How one song turns into the next. Each transition is either a crossfade or a DJ mix, never both.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp, bottom = 6.dp))
+            TransitionStyle.entries.forEach { style ->
+                val on = style == ui.style
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 6.dp).clip(RoundedCornerShape(14.dp))
+                        .background(if (on) Color(0xFFEAF1FF) else Color.Transparent)
+                        .border(1.dp, if (on) VelouraBlue else VelouraLine, RoundedCornerShape(14.dp))
+                        .clickable { onStyle(style) }.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(on, { onStyle(style) }, colors = RadioButtonDefaults.colors(selectedColor = VelouraBlue))
+                    Column(Modifier.padding(start = 6.dp).weight(1f)) {
+                        Text(style.label, color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(style.detail, color = VelouraMuted, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+        SettingsCard {
+            Text("Transition length", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+            Text("How long the two songs overlap, whichever style is chosen.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp).clickable { onAutomaticLength(!ui.automaticLength) }, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text("Automatic", color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(
+                        if (ui.style.dj != null) "About 8 s for DJ styles (whole bars when the beats line up), so the effects have room to be heard."
+                        else "About 3 s at a clear phrase or beat, about 6 s at a best-guess point.",
+                        color = VelouraMuted, fontSize = 12.sp,
+                    )
+                }
+                Switch(ui.automaticLength, onAutomaticLength, colors = SwitchDefaults.colors(checkedTrackColor = VelouraBlue))
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Fixed length", color = if (ui.automaticLength) VelouraMuted else VelouraNavy, modifier = Modifier.weight(1f))
+                Text("${ui.seconds} s", color = if (ui.automaticLength) VelouraMuted else VelouraBlue, fontWeight = FontWeight.Black)
+            }
+            Slider(
+                ui.seconds.toFloat(), { onSeconds(kotlin.math.round(it).toInt()) },
+                enabled = !ui.automaticLength,
+                valueRange = 1f..ui.maxSeconds.toFloat(), steps = ui.maxSeconds - 2,
+            )
+            Text(
+                if (ui.automaticLength) "Turn off Automatic to choose your own length."
+                else "Used for every transition, rounded to whole bars when both songs have a clear beat. A transition never takes more than a third of either song.",
+                color = VelouraMuted, fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(1.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), content = content)
+    }
+}
+
