@@ -174,7 +174,12 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
                     // was left out (#210).
                     .setAudioProcessorChain(
                         EdgeSilenceProcessor.Chain(
-                            edges, arrayOf(vocals, edges, headphoneEq, spatial, mainBass, normalizer, androidx.media3.exoplayer.audio.TeeAudioProcessor(VisualizerTap)),
+                            edges, listOfNotNull<androidx.media3.common.audio.AudioProcessor>(
+                                vocals, edges, headphoneEq, spatial,
+                                // Veloura's DJ EQ: only in that build, the only one that turns its knobs.
+                                mainBass.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ },
+                                normalizer, androidx.media3.exoplayer.audio.TeeAudioProcessor(VisualizerTap),
+                            ).toTypedArray(),
                         )
                     )
                     .build()
@@ -498,14 +503,19 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     private fun intelligentAutoMixEstimated(from: MediaItem, to: MediaItem): Boolean {
         val a = from.toSong() ?: return false
         val b = to.toSong() ?: return false
-        val d = c.intelligentAutoMixShadow.decision.value ?: return false
-        return d.songId == a.id && d.nextSongId == b.id && d.plan?.estimated == true
+        return IntelligentAutoMixActivation.estimated(
+            enabled = com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.intelligentAutoMix,
+            decision = c.intelligentAutoMixShadow.decision.value,
+            fromSongId = a.id,
+            toSongId = b.id,
+        )
     }
 
     /**
-     * Next while Intelligent AutoMix is on uses the analysed incoming cue for this exact pair. Ordinary Next remains
-     * unchanged when analysis is unavailable or unsafe. A listener asking to move now does not wait for the outgoing
-     * song's future automatic transition point.
+     * Next while Intelligent AutoMix is on uses the analysed incoming cue for this exact pair, when it rests on a
+     * phrase or a beat. Ordinary Next remains unchanged when analysis is unavailable, unsafe, or only a best guess
+     * (that cue is used in automatic blends, which cover it). A listener asking to move now does not wait for the
+     * outgoing song's future automatic transition point.
      */
     internal fun nextWithIntelligentAutoMix(): Boolean {
         if (!com.prism.music.BuildConfig.AUTOMIX_DJ || !c.settings.current.intelligentAutoMix) return false
@@ -513,7 +523,11 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         val toIndex = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET && it != player.currentMediaItemIndex } ?: return false
         val to = player.getMediaItemAt(toIndex)
         if (!mayBlend(from, to)) return false
-        val entry = intelligentAutoMixEntry(from, to) ?: return false
+        val a = from.toSong() ?: return false
+        val b = to.toSong() ?: return false
+        val entry = IntelligentAutoMixActivation.nextCueAt(
+            enabled = true, decision = c.intelligentAutoMixShadow.decision.value, fromSongId = a.id, toSongId = b.id,
+        ) ?: return false
         if (::mix.isInitialized) mix.stopBlend()
         AudioDiagnostics.log("automix", "Next ${from.mediaId} -> ${to.mediaId} at ${entry / 1000} s")
         player.seekTo(toIndex, entry)

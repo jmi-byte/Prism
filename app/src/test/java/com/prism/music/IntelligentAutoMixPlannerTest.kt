@@ -283,7 +283,8 @@ class IntelligentAutoMixPlannerTest {
         val p = IntelligentAutoMixPlanner.plan(
             220_000, nextDurationMs = 200_000, estimate = true, lineStartsMs = listOf(70_000, 94_500, 120_000),
         )!!
-        assertEquals(94_500L, p.transitionAtMs)
+        // The fade starts a second before the line, in the breath before it is sung.
+        assertEquals(94_500L - IntelligentAutoMixPlanner.LINE_LEAD_MS, p.transitionAtMs)
     }
 
     @Test
@@ -360,7 +361,7 @@ class IntelligentAutoMixPlannerTest {
         val d = IntelligentAutoMixShadow().evaluate(
             "from", 220_000, "to", null, lines, null, nextDurationMs = 200_000, estimate = true,
         )
-        assertEquals(93_000L, d.plan!!.transitionAtMs)
+        assertEquals(93_000L - IntelligentAutoMixPlanner.LINE_LEAD_MS, d.plan!!.transitionAtMs)
         assertEquals(AutoMixBoundary.ESTIMATED, d.plan!!.boundary)
     }
 
@@ -383,5 +384,28 @@ class IntelligentAutoMixPlannerTest {
         assertTrue(MixEngine.earlyBlendLengthMs(t, t, fixedMs = 9_000) in listOf(8_000L, 10_000L))
         // A 1 s fade is shorter than a bar: kept as chosen.
         assertEquals(1_000L, MixEngine.earlyBlendLengthMs(t, t, fixedMs = 1_000))
+    }
+
+    @Test
+    fun manualNextOnlyJumpsToAPhraseOrBeatCue() {
+        fun decision(entryEstimated: Boolean) = AutoMixShadowDecision(
+            songId = "from", nextSongId = "to",
+            plan = AutoMixPlan(90_000, AutoMixReason.NATURAL_WINDOW, AutoMixBoundary.PHRASE, 30_000, entryEstimated),
+            bestPartStartMs = null, phraseBoundaryCount = 1, hasUsableBeat = false,
+        )
+        assertEquals(30_000L, IntelligentAutoMixActivation.nextCueAt(true, decision(false), "from", "to"))
+        // A best-guess cue is for covered automatic blends only: Next starts the song normally.
+        assertNull(IntelligentAutoMixActivation.nextCueAt(true, decision(true), "from", "to"))
+        assertEquals(30_000L, IntelligentAutoMixActivation.entryAt(true, decision(true), "from", "to"))
+    }
+
+    @Test
+    fun aBestGuessIsOnlyReportedForTheExactPairWhileOn() {
+        val d = AutoMixShadowDecision(
+            "from", "to", AutoMixPlan(90_000, AutoMixReason.NATURAL_WINDOW, AutoMixBoundary.ESTIMATED), null, 0, false,
+        )
+        assertTrue(IntelligentAutoMixActivation.estimated(true, d, "from", "to"))
+        assertTrue(!IntelligentAutoMixActivation.estimated(false, d, "from", "to"))
+        assertTrue(!IntelligentAutoMixActivation.estimated(true, d, "from", "other"))
     }
 }

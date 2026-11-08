@@ -22,10 +22,14 @@ object DjBlends {
         }
     }
 
-    /** The echo's delay: one beat of the ending song when it's known (and not too short), else 3/8 s. */
-    fun echoDelayMs(endingBeatMs: Double?): Double =
-        endingBeatMs?.takeIf { it in MIN_ECHO_MS..MAX_ECHO_MS } ?: endingBeatMs?.takeIf { it * 2 in MIN_ECHO_MS..MAX_ECHO_MS }?.times(2)
-            ?: DEFAULT_ECHO_MS
+    /**
+     * The echo's delay: one beat of the ending song when it's known, else two beats (a very fast song) or half a beat
+     * (a very slow one), whichever lands in a usable range; 3/8 s when its beat isn't known.
+     */
+    fun echoDelayMs(endingBeatMs: Double?): Double {
+        val beat = endingBeatMs?.takeIf { it > 0 } ?: return DEFAULT_ECHO_MS
+        return listOf(beat, beat * 2, beat / 2).firstOrNull { it in MIN_ECHO_MS..MAX_ECHO_MS } ?: DEFAULT_ECHO_MS
+    }
 
     private const val MIN_ECHO_MS = 250.0
     private const val MAX_ECHO_MS = 1_000.0

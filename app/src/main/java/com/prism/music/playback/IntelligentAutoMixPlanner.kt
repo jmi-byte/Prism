@@ -61,6 +61,8 @@ object IntelligentAutoMixPlanner {
     const val ESTIMATE_MIN_DURATION_MS = 90_000L
     /** A lyric line start this close to the target is a better seam than an arbitrary moment. */
     private const val LINE_SNAP_MS = 8_000L
+    /** How far before a sung line a best-guess exit starts its fade. */
+    const val LINE_LEAD_MS = 1_000L
     /** Without a known highlight, the incoming song is entered about here (past a typical intro). */
     const val ESTIMATE_ENTRY_MS = 30_000L
 
@@ -198,7 +200,9 @@ object IntelligentAutoMixPlanner {
         val lo = if (earliest <= latest) earliest else EARLIEST_MS
         if (lo > latest) return null
         val target = (highlightEnd ?: IDEAL_MS).coerceIn(lo, latest)
-        val at = snapToLine(target, lineStartsMs, lo, latest)
+        // A line start is where singing resumes: the fade begins just before it, in the breath between lines, rather
+        // than on the line's first words.
+        val at = snapToLine(target, lineStartsMs, lo + LINE_LEAD_MS, latest + LINE_LEAD_MS)?.minus(LINE_LEAD_MS)
             ?: tempo?.let { looseBeat(target, it, lo, latest) }
             ?: target
         var entry = entryPoint(nextDurationMs, nextBestPartStartMs, nextPhraseBoundariesMs, nextTempo)
@@ -285,6 +289,17 @@ object IntelligentAutoMixActivation {
         decision?.plan?.entryAtMs?.takeIf {
             it > 0 && enabled && decision.songId == fromSongId && decision.nextSongId == toSongId && fromSongId != toSongId
         }
+
+    /** Whether the matching plan for this exact pair is (partly) a best guess; false when there is none. */
+    fun estimated(enabled: Boolean, decision: AutoMixShadowDecision?, fromSongId: String, toSongId: String): Boolean =
+        transitionAt(enabled, decision, fromSongId, toSongId) != null && decision?.plan?.estimated == true
+
+    /**
+     * The cue a manual Next may jump straight to: only a phrase- or beat-based one. A best-guess cue is fine inside
+     * a long blend that covers it, but a bare jump to it could land mid-word, so Next then starts the song normally.
+     */
+    fun nextCueAt(enabled: Boolean, decision: AutoMixShadowDecision?, fromSongId: String, toSongId: String): Long? =
+        entryAt(enabled, decision, fromSongId, toSongId)?.takeIf { decision?.plan?.entryEstimated != true }
 }
 
 /**

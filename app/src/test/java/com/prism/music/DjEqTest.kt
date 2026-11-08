@@ -190,5 +190,7 @@ class DjEqTest {
         // A very fast beat (180 ms): two beats per repeat.
         assertEquals(360.0, DjBlends.echoDelayMs(180.0), 0.0)
         assertEquals(DjBlends.DEFAULT_ECHO_MS, DjBlends.echoDelayMs(null), 0.0)
+        // A very slow beat (55 BPM, ~1091 ms): half a beat per repeat, still on the beat.
+        assertEquals(1_091.0 / 2, DjBlends.echoDelayMs(1_091.0), 0.0)
     }
 }

@@ -68,6 +68,8 @@ private sealed interface DiscoveryFeed {
 fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
     var tab by remember { mutableStateOf(VelouraTab.HOME) }
     var showLogin by remember { mutableStateOf(false) }
+    // Kept while the app is open, so switching tabs doesn't download Home's mixes and the library again.
+    val libraryCache = remember { LibraryCache() }
     val link by deepLink.collectAsState()
     var linkMessage by remember { mutableStateOf<String?>(null) }
 
@@ -120,7 +122,7 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
                     when (tab) {
                         VelouraTab.HOME -> Discover(c, { tab = VelouraTab.SEARCH }, { tab = VelouraTab.DJ })
                         VelouraTab.SEARCH -> Search(c) { tab = VelouraTab.DJ }
-                        VelouraTab.LIBRARY -> VelouraLibrary(c, onConnect = { showLogin = true }, onPlayed = { tab = VelouraTab.DJ })
+                        VelouraTab.LIBRARY -> VelouraLibrary(c, libraryCache, onConnect = { showLogin = true }, onPlayed = { tab = VelouraTab.DJ })
                         VelouraTab.DJ -> NowPlaying(c) { tab = VelouraTab.SEARCH }
                         VelouraTab.ACCOUNT -> Account(c, onConnect = { showLogin = true }, onBack = { tab = VelouraTab.HOME })
                         VelouraTab.SETTINGS -> MixSettings(c)
@@ -529,7 +531,7 @@ private fun MixSettings(c: AppContainer) {
                     Text("$seconds s", color = if (settings.mixAuto) VelouraMuted else VelouraBlue, fontWeight = FontWeight.Black)
                 }
                 Slider(
-                    seconds.toFloat(), { c.settings.setMixSeconds(it.toInt()) },
+                    seconds.toFloat(), { c.settings.setMixSeconds(kotlin.math.round(it).toInt()) },
                     enabled = !settings.mixAuto,
                     valueRange = 1f..CROSSFADE_SLIDER_MAX.toFloat(), steps = CROSSFADE_SLIDER_MAX - 2,
                 )
@@ -601,8 +603,14 @@ private fun Account(c: AppContainer, onConnect: () -> Unit, onBack: () -> Unit) 
     }
 }
 
+/** What the Library tab has fetched: Home's shelves (for the mixes) and whether the library was refreshed. */
+private class LibraryCache {
+    val home = mutableStateOf<List<com.prism.music.data.model.Shelf>?>(null)
+    var refreshed = false
+}
+
 @Composable
-private fun VelouraLibrary(c: AppContainer, onConnect: () -> Unit, onPlayed: () -> Unit) {
+private fun VelouraLibrary(c: AppContainer, cache: LibraryCache, onConnect: () -> Unit, onPlayed: () -> Unit) {
     val settings by c.settings.flow.collectAsState()
     val liked by c.library.likedShown.collectAsState()
     val library by c.library.playlists.collectAsState()
@@ -622,10 +630,13 @@ private fun VelouraLibrary(c: AppContainer, onConnect: () -> Unit, onPlayed: () 
         return
     }
     // The account's playlists are synced by the library; Home supplies the auto-generated mixes and suggestions.
-    LaunchedEffect(Unit) { c.library.refreshCollections() }
-    val home by produceState<List<com.prism.music.data.model.Shelf>?>(null) {
-        value = withContext(Dispatchers.IO) { runCatching { c.ytm.fullHome(pages = 3) }.getOrDefault(emptyList()) }
+    LaunchedEffect(Unit) {
+        if (!cache.refreshed) { cache.refreshed = true; c.library.refreshCollections() }
+        if (cache.home.value == null) {
+            cache.home.value = withContext(Dispatchers.IO) { runCatching { c.ytm.fullHome(pages = 3) }.getOrDefault(emptyList()) }
+        }
     }
+    val home by cache.home
     val yours = VelouraPlaylists.accountPlaylists(library)
     val offered = home?.let { VelouraPlaylists.suggestions(it, library) }
 
