@@ -694,6 +694,7 @@ data class VelouraMixSettingsUi(
     val automaticLength: Boolean,
     val seconds: Int,
     val maxSeconds: Int,
+    val keepMixGoing: Boolean = true,
 )
 
 @Composable
@@ -703,6 +704,7 @@ internal fun VelouraMixSettings(
     onStyle: (TransitionStyle) -> Unit,
     onAutomaticLength: (Boolean) -> Unit,
     onSeconds: (Int) -> Unit,
+    onKeepMixGoing: (Boolean) -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SettingsCard {
@@ -712,6 +714,15 @@ internal fun VelouraMixSettings(
                     Text("Leave each song partway through and bring the next one in at a good moment. Off: songs play in full, one after another.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
                 }
                 Switch(ui.autoMix, onAutoMix, colors = SwitchDefaults.colors(checkedTrackColor = VelouraBlue))
+            }
+        }
+        SettingsCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text("Keep the mix going", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                    Text("When the queue runs low, add songs like the last one from YouTube Music: Punjabi and Hindi with Punjabi and Hindi, English with English, picked by how alike they sound.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
+                }
+                Switch(ui.keepMixGoing, onKeepMixGoing, colors = SwitchDefaults.colors(checkedTrackColor = VelouraBlue))
             }
         }
         SettingsCard {
@@ -770,6 +781,108 @@ internal fun VelouraMixSettings(
 private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(1.dp)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), content = content)
+    }
+}
+
+// ---- More like this ----
+
+data class SimilarRowUi(
+    val key: String,
+    val title: String,
+    val artist: String,
+    val thumbnail: String?,
+    val language: String,
+    /** "122 BPM", when measured. */
+    val bpm: String?,
+    /** "8A", when measured. */
+    val keyLabel: String?,
+    /** 0..100. */
+    val match: Int,
+)
+
+data class VelouraSimilarUi(
+    val seedTitle: String,
+    val seedArtist: String,
+    val seedThumbnail: String?,
+    /** "Punjabi", "English"… */
+    val seedLanguage: String,
+    /** What's suggested: "Punjabi & Hindi songs", "English songs", "Songs in any language". */
+    val showing: String,
+    /** What the search is doing, while it does. */
+    val progress: String?,
+    val progressFraction: Float?,
+    val rows: List<SimilarRowUi>,
+    val message: String? = null,
+)
+
+@Composable
+internal fun VelouraSimilar(
+    ui: VelouraSimilarUi,
+    onBack: () -> Unit,
+    onPlay: (SimilarRowUi) -> Unit,
+    onAdd: (SimilarRowUi) -> Unit,
+    onAddAll: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().background(VelouraBackground)) {
+        VelouraTitleBar("More like this", PrismIcons.ArrowBack, "Back", onBack)
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 20.dp)) {
+            Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp), elevation = CardDefaults.cardElevation(2.dp)) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Artwork(ui.seedThumbnail, Modifier.size(64.dp), corner = 14.dp, seed = ui.seedTitle.hashCode())
+                    Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                        Text("LIKE", color = VelouraPurple, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                        Text(ui.seedTitle, color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(ui.seedArtist, color = VelouraMuted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Chip(ui.seedLanguage, VelouraPurple)
+                            Chip(ui.showing, VelouraBlue)
+                        }
+                    }
+                }
+            }
+            if (ui.progress != null) {
+                Text(ui.progress, Modifier.padding(top = 16.dp), color = VelouraNavy, fontSize = 14.sp)
+                if (ui.progressFraction != null) LinearProgressIndicator({ ui.progressFraction }, Modifier.fillMaxWidth().padding(top = 8.dp), color = VelouraBlue, trackColor = Color(0xFFDCE4EF))
+                else LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp), color = VelouraBlue, trackColor = Color(0xFFDCE4EF))
+            }
+            ui.message?.let { Text(it, Modifier.padding(top = 14.dp), color = VelouraMuted, fontSize = 14.sp) }
+            if (ui.rows.isNotEmpty()) {
+                Row(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${ui.rows.size} songs", Modifier.weight(1f), color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 19.sp)
+                    Button(onAddAll, colors = ButtonDefaults.buttonColors(containerColor = VelouraBlue)) { Text("Queue them all next") }
+                }
+                ui.rows.forEach { r -> SimilarRow(r, onPlay, onAdd) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Chip(text: String, color: Color) {
+    Text(text, Modifier.clip(RoundedCornerShape(8.dp)).background(color.copy(alpha = 0.1f)).padding(horizontal = 7.dp, vertical = 2.dp), color = color, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+}
+
+@Composable
+private fun SimilarRow(r: SimilarRowUi, onPlay: (SimilarRowUi) -> Unit, onAdd: (SimilarRowUi) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(14.dp)).background(Color.White).clickable { onPlay(r) }.padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Artwork(r.thumbnail, Modifier.size(52.dp), corner = 10.dp, seed = r.title.hashCode())
+        Column(Modifier.padding(horizontal = 11.dp).weight(1f)) {
+            Text(r.title, color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(r.artist, color = VelouraMuted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Chip(r.language, VelouraPurple)
+                r.bpm?.let { Chip(it, VelouraNavy) }
+                r.keyLabel?.let { Chip("Key $it", VelouraNavy) }
+            }
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("${r.match}%", color = VelouraBlue, fontWeight = FontWeight.Black, fontSize = 16.sp)
+            Text("match", color = VelouraMuted, fontSize = 10.sp)
+        }
+        IconButton({ onAdd(r) }) { Icon(PrismIcons.PlaylistAdd, "Add to queue", tint = VelouraNavy) }
     }
 }
 

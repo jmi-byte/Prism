@@ -43,7 +43,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.sin
 
 
-private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ, QUEUE, ACCOUNT, SETTINGS }
+private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ, QUEUE, SIMILAR, ACCOUNT, SETTINGS }
 
 /** Veloura's UI (laid out in VelouraScreens.kt). Prism's playback and YouTube Music engines remain underneath. */
 @Composable
@@ -57,7 +57,7 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
     val link by deepLink.collectAsState()
     var message by remember { mutableStateOf<String?>(null) }
     fun go(t: VelouraTab) {
-        if (t != VelouraTab.DJ && t != VelouraTab.QUEUE) lastTab = t
+        if (t != VelouraTab.DJ && t != VelouraTab.QUEUE && t != VelouraTab.SIMILAR) lastTab = t
         tab = t
     }
 
@@ -70,7 +70,7 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
     }
     // A full-screen page goes back with the system Back, as the design's ⌄ and ← do.
     androidx.activity.compose.BackHandler(enabled = tab != VelouraTab.HOME && !showLogin) {
-        go(when (tab) { VelouraTab.QUEUE -> VelouraTab.DJ; VelouraTab.DJ -> lastTab; else -> VelouraTab.HOME })
+        go(when (tab) { VelouraTab.QUEUE, VelouraTab.SIMILAR -> VelouraTab.DJ; VelouraTab.DJ -> lastTab; else -> VelouraTab.HOME })
     }
 
     MaterialTheme(colorScheme = VelouraColors) {
@@ -87,12 +87,15 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
             VelouraTab.DJ -> Surface(Modifier.fillMaxSize(), color = Color.White) {
                 NowPlayingScreen(
                     c, onCollapse = { go(lastTab) },
-                    menu = listOf("Queue & Transition Plan" to { go(VelouraTab.QUEUE) }) + mixMenu,
+                    menu = listOf("More like this" to { go(VelouraTab.SIMILAR) }, "Queue & Transition Plan" to { go(VelouraTab.QUEUE) }) + mixMenu,
                     onFindMusic = { go(VelouraTab.SEARCH) },
                 )
             }
             VelouraTab.QUEUE -> Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
                 QueueScreen(c, onBack = { go(VelouraTab.DJ) }, menu = mixMenu)
+            }
+            VelouraTab.SIMILAR -> Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
+                SimilarScreen(c, onBack = { go(VelouraTab.DJ) })
             }
             else -> Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
                 Scaffold(
@@ -444,6 +447,74 @@ private fun applyReorder(c: AppContainer, before: List<QueueSongUi>, after: List
     }
 }
 
+/** "More like this": songs like the one playing (when the screen opened), from all of YouTube Music. */
+@Composable
+private fun SimilarScreen(c: AppContainer, onBack: () -> Unit) {
+    val playing by c.player.currentSong.collectAsState()
+    // The song it was opened for stays the subject, even as the music moves on.
+    val seed = remember { c.player.currentSong.value }
+    if (seed == null) {
+        Column(Modifier.fillMaxSize()) {
+            VelouraTitleBar("More like this", PrismIcons.ArrowBack, "Back", onBack)
+            Text("Play something first, and Veloura will find songs like it.", Modifier.padding(24.dp), color = VelouraMuted)
+        }
+        return
+    }
+    var progress by remember { mutableStateOf<com.prism.music.SimilarSongs.Progress?>(com.prism.music.SimilarSongs.Progress("Starting…")) }
+    var result by remember { mutableStateOf<com.prism.music.SimilarSongs.Result?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(seed.id) {
+        val queued = c.player.queue.value.map { it.song.id }.toSet()
+        result = runCatching { c.similarSongs.find(seed, queued) { progress = it } }.getOrElse {
+            message = "Couldn't reach YouTube Music: ${it.message ?: "try again"}"; null
+        }
+        progress = null
+        if (result?.picks?.isEmpty() == true) message = "YouTube Music didn't suggest any songs like this one."
+    }
+    val r = result
+    val lang = r?.seedLanguage
+    VelouraSimilar(
+        VelouraSimilarUi(
+            seedTitle = seed.title, seedArtist = seed.artistText, seedThumbnail = seed.thumbnail,
+            seedLanguage = lang?.label ?: "Reading…",
+            showing = when (lang?.group) {
+                null -> "Finding…"
+                LanguageGroup.DESI -> "Punjabi & Hindi songs"
+                LanguageGroup.ENGLISH -> "English songs"
+                LanguageGroup.OTHER -> "Songs in its language"
+                LanguageGroup.UNKNOWN -> "Songs in any language"
+            },
+            progress = progress?.let { p -> if (p.total > 0) "${p.stage} ${p.done}/${p.total}" else p.stage },
+            progressFraction = progress?.takeIf { it.total > 0 }?.let { it.done.toFloat() / it.total },
+            rows = r?.picks.orEmpty().map { p ->
+                SimilarRowUi(
+                    p.song.id, p.song.title, p.song.artistText, p.song.thumbnail, p.language.label,
+                    p.bpm?.let { "${Math.round(it)} BPM" }, p.key, p.match,
+                )
+            },
+            message = message,
+        ),
+        onBack = onBack,
+        onPlay = { row ->
+            r?.picks?.firstOrNull { it.song.id == row.key }?.let { p ->
+                // Next, so AutoMix mixes into it as it would any Next.
+                c.player.playNext(p.song)
+                if (playing != null) c.player.next()
+                message = "Mixing into ${p.song.title}…"
+            }
+        },
+        onAdd = { row ->
+            r?.picks?.firstOrNull { it.song.id == row.key }?.let { p -> c.player.addToQueue(p.song); message = "Added ${p.song.title} to the queue" }
+        },
+        onAddAll = {
+            r?.picks?.map { it.song }?.takeIf { it.isNotEmpty() }?.let { songs ->
+                c.player.playNext(songs, null)
+                message = "${songs.size} songs queued next"
+            }
+        },
+    )
+}
+
 @Composable
 private fun ActionCard(title: String, detail: String, action: String, onClick: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp)) {
@@ -507,6 +578,7 @@ private fun MixSettings(c: AppContainer) {
             automaticLength = settings.mixAuto,
             seconds = settings.mixSeconds.coerceIn(1, CROSSFADE_SLIDER_MAX),
             maxSeconds = CROSSFADE_SLIDER_MAX,
+            keepMixGoing = settings.sound.keepMixGoing,
         ),
         onAutoMix = { autoMixOn(c, it) },
         onStyle = { style ->
@@ -515,6 +587,7 @@ private fun MixSettings(c: AppContainer) {
         },
         onAutomaticLength = { c.settings.setMixAuto(it) },
         onSeconds = { c.settings.setMixSeconds(it) },
+        onKeepMixGoing = { c.settings.setKeepMixGoing(it) },
     )
 }
 

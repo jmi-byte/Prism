@@ -541,6 +541,9 @@ class AppContainer(val app: Application) {
     /** New to you, Deep cuts and On this day (1.8.2): only made while they're on Home, and what tuned radios go by. */
     val discover by lazy { com.prism.music.data.foryou.Discover(this) }
     /** The songs heard this session, for "No repeats this session" (1.8.2, #159). */
+    /** Veloura's "More like this" and "Keep the mix going": similar songs from YouTube Music, by language and sound. */
+    val similarSongs by lazy { com.prism.music.SimilarSongs(this) }
+
     val sessionHeard by lazy {
         val prefs = app.getSharedPreferences("session_heard", android.content.Context.MODE_PRIVATE)
         val serializer = kotlinx.serialization.builtins.MapSerializer(String.serializer(), Long.serializer())

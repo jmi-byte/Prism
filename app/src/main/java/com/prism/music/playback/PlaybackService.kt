@@ -1650,6 +1650,11 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         if (autoplayJob != null && autoplayFor !== src) dropAutoplay()
         // A song's radio (Quick picks, "Radio" in a song's menu) keeps going whether or not Autoplay is on: that's what it is.
         val radio = src.isSongRadio
+        // Veloura's "Keep the mix going" tops the queue up in place of Autoplay: songs like the last one, same language group.
+        if (com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.sound.keepMixGoing && !radio) {
+            keepMixGoing(src)
+            return
+        }
         if ((!c.settings.current.autoplay && !radio) || player.mediaItemCount == 0 || c.queue.followingHost || c.queue.filling) return
         // No music radio after a podcast episode.
         if (player.currentMediaItem?.toSong()?.isEpisode == true) return
@@ -1752,6 +1757,32 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
 
     /** Autoplay's look for more songs, while it's out, and the queue it's for. */
     @Volatile private var autoplayJob: kotlinx.coroutines.Job? = null
+    @Volatile private var keepGoingJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Veloura's "Keep the mix going": with two songs or fewer left, up to five songs like the last one are added from
+     * YouTube Music ([com.prism.music.SimilarSongs]: the same language group, ranked by how alike they sound), none already
+     * queued or heard this session. Dropped if the queue is replaced while it looks.
+     */
+    private fun keepMixGoing(src: com.prism.music.playback.QueueSource) {
+        if (player.mediaItemCount == 0 || c.queue.followingHost || c.queue.filling) return
+        if (player.currentMediaItem?.toSong()?.isEpisode == true || player.repeatMode != Player.REPEAT_MODE_OFF) return
+        if (player.mediaItemCount - player.currentMediaItemIndex > 2 || keepGoingJob?.isActive == true) return
+        if (!c.network.isOnline()) return
+        val seed = player.getMediaItemAt(player.mediaItemCount - 1).toSong()?.takeIf { !it.isEpisode && !it.isLive } ?: return
+        keepGoingJob = scope.launch {
+            val queued = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet()
+            val found = runCatching { c.similarSongs.find(seed, queued, limit = 10, analyse = 8) }
+                .onFailure { android.util.Log.w("VelouraMix", "keep the mix going failed", it) }.getOrNull() ?: return@launch
+            if (c.queue.source.value !== src || !c.settings.current.sound.keepMixGoing) return@launch
+            val now = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet()
+            val session = c.sessionHeard
+            val add = found.picks.filter { it.song.id !in now && !session.has(it.song) }.take(5).map { it.song }
+            if (add.isEmpty()) return@launch
+            AudioDiagnostics.log("automix", "keep the mix going: ${add.size} like ${seed.id} (${found.seedLanguage.label})")
+            player.addMediaItems(add.map { it.toMediaItem() })
+        }
+    }
     private var autoplayFor: QueueSource? = null
 
     /** The queue is being replaced: what's being found for this one won't join the next, or hold back the next's own. */

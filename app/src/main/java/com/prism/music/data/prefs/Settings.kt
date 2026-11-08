@@ -708,6 +708,8 @@ data class SoundPrefs(
     val djEffects: Boolean = true,
     /** With [djEffects]: how blends are mixed ([DjStyle]). */
     val djStyle: DjStyle = DjStyle.AUTO,
+    /** Veloura: as the queue runs out, it's topped up with songs like the last one, in the same language group. */
+    val keepMixGoing: Boolean = true,
     /** Normalize volume's level, in LUFS (A2). */
     val normalizeTarget: Int = -14,
     /** An album playing through keeps its own song-to-song levels: one level for the whole album (A2). */
@@ -1892,6 +1894,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val intelligentAutoMix = booleanPreferencesKey("intelligent_auto_mix")
         val djEffects = booleanPreferencesKey("veloura_dj_effects")
         val djStyle = stringPreferencesKey("veloura_dj_style")
+        val keepMixGoing = booleanPreferencesKey("veloura_keep_mix_going")
         val mixSeconds = intPreferencesKey("mix_seconds")
         val mixAuto = booleanPreferencesKey("mix_auto")
         val mixBeatMatch = booleanPreferencesKey("mix_beat_match")
@@ -2253,7 +2256,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
                 "hold_seek_seconds", "canvas_with_downloads", "canvas_with_downloads_cellular", "audio_quality", "cellular_quality",
                 "premium_stream", "autoplay", "autoplay_source", "radio_songs_only", "songs_everywhere", "show_track_length",
                 "audio_diagnostics", "search_keyboard", "double_tap_seek_seconds", "stop_on_swipe_away", "data_saver",
-                "video_continues", "lossless", "lossless_local", "normalize", "skip_silence", "mix", "intelligent_auto_mix", "veloura_dj_effects", "veloura_dj_style", "mix_seconds", "mix_auto",
+                "video_continues", "lossless", "lossless_local", "normalize", "skip_silence", "mix", "intelligent_auto_mix", "veloura_dj_effects", "veloura_dj_style", "veloura_keep_mix_going", "mix_seconds", "mix_auto",
                 "mix_beat_match", "mix_tempo_cellular", "content_country", "video_max_height", "cache_size_mb", "download_wifi_only",
                 "download_likes", "smart_downloads", "smart_download_gb", "offline_gb", "smart_downloads_cellular", "eq",
                 "home_layout", "auto_add_sections", "home_hide_kinds", "home_header_picture", "search_sections", "search_chips", "replay_hours", "greeting_text", "greeting_show_name", "home_shortcuts",
@@ -2566,6 +2569,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
                 crossfadeCurve = p.enum(K.crossfadeCurve, d.sound.crossfadeCurve),
                 djEffects = p[K.djEffects] ?: d.sound.djEffects,
                 djStyle = p.enum(K.djStyle, d.sound.djStyle),
+                keepMixGoing = p[K.keepMixGoing] ?: d.sound.keepMixGoing,
                 normalizeTarget = (p[K.normalizeTarget] ?: d.sound.normalizeTarget).coerceIn(-30, -5),
                 normalizeAlbums = p[K.normalizeAlbums] ?: d.sound.normalizeAlbums,
                 musicSpeed = (p[K.musicSpeedDefault] ?: d.sound.musicSpeed).coerceIn(0.5f, 2f),
@@ -3020,6 +3024,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
     fun setIntelligentAutoMix(v: Boolean) = edit { it[K.intelligentAutoMix] = v }
     fun setDjEffects(v: Boolean) = edit { it[K.djEffects] = v }
     fun setDjStyle(v: DjStyle) = edit { it[K.djStyle] = v.name }
+    fun setKeepMixGoing(v: Boolean) = edit { it[K.keepMixGoing] = v }
     fun setMixSeconds(v: Int) = edit { it[K.mixSeconds] = v.coerceIn(1, MAX_CROSSFADE_SECONDS) }
     fun setMixAuto(v: Boolean) = edit { it[K.mixAuto] = v }
     fun setMixBeatMatch(v: Boolean) = edit { it[K.mixBeatMatch] = v }

@@ -90,6 +90,8 @@ object Genres {
 
     /** True for tiles and shelves about non-English regional music ("Bollywood & Indian", "Hip-hop en Español"…). */
     fun isRegional(title: String): Boolean {
+        // Veloura is for Punjabi and Hindi listeners as much as English ones: nothing is left out there.
+        if (com.prism.music.BuildConfig.AUTOMIX_DJ) return false
         val l = title.lowercase()
         return regionalPatterns.any { it.containsMatchIn(l) }
     }
