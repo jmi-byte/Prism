@@ -264,7 +264,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             putBoolean("android.support.wearable.media.extra.RESERVE_SLOT_SKIP_TO_NEXT", true)
         })
         setMediaNotificationProvider(DefaultMediaNotificationProvider.Builder(this).build().apply {
-            setSmallIcon(R.drawable.ic_notification)
+            setSmallIcon(com.prism.music.VelouraBranding.notificationIcon)
         })
         // Keep the media notification (and the system media controls) up for a
         // paused or restored queue, not only while audio is actively playing.

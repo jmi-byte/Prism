@@ -12,6 +12,10 @@ package com.prism.music
 object VelouraBranding {
     const val NAME = "Veloura"
 
+    /** The status bar and notification icon: Veloura's ribbon V in the Veloura build, Prism's mark otherwise. */
+    val notificationIcon: Int
+        get() = if (BuildConfig.AUTOMIX_DJ) R.drawable.ic_notification_veloura else R.drawable.ic_notification
+
     /** "Prism" as a word: not after a letter, digit, slash, @, dot or dash, nor before one (or before a dot and a letter). */
     private val WORD = Regex("(?<![\\w/@.-])Prism(?![\\w/-]|\\.\\w)")
 

@@ -205,6 +205,12 @@ class VelouraScreensRenderTest {
         val mono = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
         ctx.getDrawable(R.drawable.ic_veloura_monochrome)!!.apply { setBounds(0, 0, px, px); draw(android.graphics.Canvas(mono)) }
         File(dir, "launcher-icon-mono.png").outputStream().use { mono.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        // The status bar icon: white on nothing, the V inside its 24 dp.
+        val note = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
+        ctx.getDrawable(R.drawable.ic_notification_veloura)!!.apply { setBounds(0, 0, 96, 96); draw(android.graphics.Canvas(note)) }
+        File(dir, "notification-icon.png").outputStream().use { note.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        assertTrue("V drawn", (0 until 96).any { x -> android.graphics.Color.alpha(note.getPixel(x, 48)) > 200 })
+        assertTrue("fits", (0 until 96).all { android.graphics.Color.alpha(note.getPixel(it, 0)) < 10 && android.graphics.Color.alpha(note.getPixel(0, it)) < 10 })
         // The ribbon is there: the middle is lit, the corner is the dark background.
         val mid = bmp.getPixel(px * 46 / 108, px * 50 / 108)
         assertTrue("ribbon drawn", android.graphics.Color.blue(mid) > 150)

@@ -301,7 +301,7 @@ class LockScreenGate(private val context: Context, private val settings: Flow<Ap
         } else null
         val pending = PendingIntent.getActivity(context, FALLBACK_ID, start, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT, options)
         val note = NotificationCompat.Builder(context, CHANNEL)
-            .setSmallIcon(R.drawable.ic_notification)
+            .setSmallIcon(com.prism.music.VelouraBranding.notificationIcon)
             .setContentTitle(tr(R.string.lock_screen_title))
             .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

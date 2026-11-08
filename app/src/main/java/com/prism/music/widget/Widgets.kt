@@ -223,7 +223,7 @@ object Widgets {
         v.setTextViewText(R.id.widget_title, song?.title ?: com.prism.music.tr(R.string.widget_nothing))
         v.setTextViewText(R.id.widget_artist, song?.artistText ?: com.prism.music.tr(R.string.widget_tap_to_play))
         val cover = art?.square?.get(style)
-        if (cover != null) v.setImageViewBitmap(R.id.widget_art, cover) else v.setImageViewResource(R.id.widget_art, R.drawable.ic_notification)
+        if (cover != null) v.setImageViewBitmap(R.id.widget_art, cover) else v.setImageViewResource(R.id.widget_art, com.prism.music.VelouraBranding.notificationIcon)
         v.setImageViewResource(R.id.widget_play, if (s.playing) R.drawable.ic_w_pause else R.drawable.ic_w_play)
         v.setContentDescription(R.id.widget_play, com.prism.music.tr(if (s.playing) R.string.widget_pause else R.string.widget_play))
         val heart = when (style) {
@@ -277,7 +277,10 @@ object Widgets {
         )
         v.setOnClickPendingIntent(R.id.widget_open, open)
         v.setOnClickPendingIntent(R.id.widget_art, open)
-        if (style == WidgetStyle.PRISM) v.setOnClickPendingIntent(R.id.widget_logo, open)
+        if (style == WidgetStyle.PRISM) {
+            v.setOnClickPendingIntent(R.id.widget_logo, open)
+            v.setImageViewResource(R.id.widget_logo, com.prism.music.VelouraBranding.notificationIcon)
+        }
         if (!o.isDefault) applyOptions(v, style, o, art)
         return v
     }

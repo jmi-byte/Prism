@@ -49,7 +49,7 @@ class ImportMatchWorker(context: Context, params: WorkerParameters) : CoroutineW
                 .setName(tr(R.string.imp_title)).setDescription(tr(R.string.imp_channel_desc)).build()
         )
         val n = NotificationCompat.Builder(ctx, CHANNEL)
-            .setSmallIcon(R.drawable.ic_notification)
+            .setSmallIcon(com.prism.music.VelouraBranding.notificationIcon)
             .setContentTitle(tr(R.string.imp_matching_notice))
             .setContentText(tr(R.string.imp_matching_n_of_n, done, total))
             .setProgress(total, done.coerceAtMost(total), false)

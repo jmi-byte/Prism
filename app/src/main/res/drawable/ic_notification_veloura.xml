@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Veloura's ribbon V (ic_veloura_monochrome's paths) at 24 dp for the status bar and media notification: white on
+     transparent, as Android wants a notification icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <group android:scaleX="0.046" android:scaleY="0.046" android:translateX="-0.74" android:translateY="-0.28">
+        <path android:pathData="M60,118 C58,98 74,86 104,86 L178,88 C196,89 205,98 212,110 L300,300 L262,420 C250,430 232,420 222,404 L78,170 C66,152 60,135 60,118 Z" android:fillColor="#FFFFFFFF"/>
+        <path android:pathData="M386,110 L494,104 C486,124 470,156 455,190 L425,262 C405,295 350,312 292,302 L386,110 Z" android:fillColor="#FFFFFFFF"/>
+        <path android:pathData="M292,302 C350,312 405,295 425,262 L405,320 C388,368 368,410 338,432 C318,446 278,448 250,432 C236,424 226,412 218,398 C245,370 270,336 292,302 Z" android:fillColor="#FFFFFFFF"/>
+    </group>
+</vector>

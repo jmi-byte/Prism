@@ -745,7 +745,7 @@ class PrismDownloadService : DownloadService(
             android.app.PendingIntent.getActivity(this, 0, it, android.app.PendingIntent.FLAG_IMMUTABLE)
         }
         return androidx.core.app.NotificationCompat.Builder(this, DOWNLOAD_CHANNEL)
-            .setSmallIcon(R.drawable.ic_notification)
+            .setSmallIcon(com.prism.music.VelouraBranding.notificationIcon)
             .setContentTitle(com.prism.music.trp(R.plurals.downloading_n_songs, active.size.coerceAtLeast(1)))
             .setContentText(waiting ?: title ?: tr(R.string.getting_ready))
             .setProgress(100, percent.coerceAtLeast(0), percent < 0 && waiting == null)

@@ -71,7 +71,7 @@ object Notifications {
     fun post(context: Context, channel: String, id: Int, title: String, text: String, link: String?, build: (NotificationCompat.Builder) -> Unit = {}) {
         if (!allowed(context)) return
         val n = NotificationCompat.Builder(context, channel)
-            .setSmallIcon(R.drawable.ic_notification)
+            .setSmallIcon(com.prism.music.VelouraBranding.notificationIcon)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
