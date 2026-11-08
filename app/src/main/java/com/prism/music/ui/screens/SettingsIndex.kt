@@ -325,6 +325,8 @@ object SettingsIndex {
         SettingEntry(D, tr(R.string.load_ahead), tr(R.string.load_ahead), tr(R.string.preload_buffer)),
         SettingEntry(D, tr(R.string.mobile_data), tr(R.string.load_ahead_on_mobile_data), tr(R.string.preload_cellular)),
         SettingEntry(S, tr(R.string.crossfade), tr(R.string.crossfade), tr(R.string.mix_blend_transition_fade) + " " + tr(R.string.crossfade_songs) + " " + tr(R.string.automatic_length)),
+        // Shown only in the Veloura build (AUTOMIX_DJ); listed always, as the index doesn't know the build.
+        SettingEntry(S, tr(R.string.crossfade), tr(R.string.intelligent_auto_mix), tr(R.string.intelligent_auto_mix_detail)),
         SettingEntry(S, tr(R.string.crossfade), tr(R.string.length), needs = manualLength),
         SettingEntry(S, tr(R.string.crossfade), tr(R.string.match_tempo_and_beats_dj_style), tr(R.string.bpm_beatmatch), needs = crossfade),
         SettingEntry(S, tr(R.string.crossfade), tr(R.string.keep_an_album_s_songs_whole), tr(R.string.keep_albums_keywords), needs = crossfade),

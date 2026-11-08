@@ -58,7 +58,7 @@ class MixEngine(
     /** Scans a song from what's on the phone (no network), if it hasn't been ([MixTempo.measure]). */
     private val scanFromPhone: (String) -> Unit,
     /** A second player for the ending song: same sources and effects as the main one (plus [ShiftProcessor] first), no audio focus. */
-    private val buildTail: (ShiftProcessor) -> ExoPlayer,
+    private val buildTail: (ShiftProcessor, BassSwapProcessor?) -> ExoPlayer,
     /** A blend is over (done or stopped) and the main player is back to normal: the listener's own speed can return. */
     private val onSettled: () -> Unit = {},
     /** The pitch the music plays at (Sing's key, Reddit R6): blends change the speed only, never the key. */
@@ -75,6 +75,10 @@ class MixEngine(
     private val earlyEstimated: (from: MediaItem, to: MediaItem) -> Boolean = { _, _ -> false },
     /** The listener's crossfade length for mid-song blends, in ms; null leaves it automatic. */
     private val earlyLength: () -> Long? = { null },
+    /** The main player's bass knob ([BassSwapProcessor]); null where the build has no DJ effects. */
+    private val mainBass: BassSwapProcessor? = null,
+    /** DJ effects are on: blends swap the two songs' bass on a beat. */
+    private val bassSwap: () -> Boolean = { false },
 ) {
     /** The main player at [speed], in the music's key. */
     private fun at(speed: Float) = PlaybackParameters(speed, pitch())
@@ -96,6 +100,8 @@ class MixEngine(
         val earlyStartMs: Long? = null,
         /** The frozen incoming cue paired with [earlyStartMs]. */
         val earlyInMs: Long? = null,
+        /** Where in the blend (0..1, the ending song's time) the two songs' bass is swapped. */
+        val swapAt: Float = 0.5f,
     ) {
         /** How many times the blend has been put off to get the tail in step. */
         var postponed = 0
@@ -111,6 +117,11 @@ class MixEngine(
     private var settleFrom = 1f
     private var settleStartedAt = 0L
     private var noPlanFor: String? = null
+    /** The ending song's bass knob, on the tail player; null with no tail or no DJ effects. */
+    private var tailBass: BassSwapProcessor? = null
+    /** This blend swaps bass, and whether it has swapped yet. */
+    private var swapping = false
+    private var swapped = false
     private var retryFor: String? = null
     private var retryCount = 0
     private var lastSyncLog = 0L
@@ -234,7 +245,9 @@ class MixEngine(
         state.mark.value = BlendMark(p.fromId, p.startMs, p.lengthMs)
         if (main.currentPosition < p.startMs - LEAD_MS - PREPARE_MS - 3000) return 250
         val shift = ShiftProcessor()
-        val t = buildTail(shift)
+        val bass = mainBass?.let { BassSwapProcessor() }
+        tailBass = bass
+        val t = buildTail(shift, bass)
         shifter = shift
         t.volume = 0f
         t.setMediaItem(item.buildUpon().build())
@@ -349,7 +362,8 @@ class MixEngine(
             }
         }
         if (early == null && start < dur / 2) return noBlend(item, "the blend would start before the song's middle")
-        return Plan(item.mediaId, next.mediaId, toIndex, start, inMs, len, ratio, beats, beatMs, early, guardedIn)
+        val swapAt = bassSwapAt(len, if (beats && a != null) a.periodMs else null)
+        return Plan(item.mediaId, next.mediaId, toIndex, start, inMs, len, ratio, beats, beatMs, early, guardedIn, swapAt)
     }
 
     private fun knownDurationMs(item: MediaItem): Long? =
@@ -489,6 +503,10 @@ class MixEngine(
         // Hand over: the tail carries the ending song on; the main player moves to the next one, silent.
         t.volume = 1f
         main.volume = 0f
+        // DJ effects: the next song comes in with its bass cut (set before the seek, so its first sound is already cut).
+        swapping = mainBass != null && tailBass != null && bassSwap()
+        swapped = false
+        if (swapping) { mainBass?.setBass(0f); tailBass?.setBass(1f) }
         main.seekTo(p.toIndex, p.inMs)
         main.playbackParameters = at(p.ratio)
         // The next song's bar grows in over the blend, in its own time (faster or slower by the tempo match).
@@ -545,12 +563,21 @@ class MixEngine(
         val (incoming, outgoing) = curve().gains(progress)
         main.volume = incoming
         t.volume = outgoing
+        // The bass swap, a little early: the knobs act on audio still to reach the speaker by about the output's delay.
+        if (swapping && !swapped && progress + SWAP_LEAD_MS.toFloat() / p.lengthMs >= p.swapAt) {
+            swapped = true
+            mainBass?.setBass(1f)
+            tailBass?.setBass(0f)
+            note("bass swapped at %.2f of the blend".format(progress))
+        }
         state.blend.value = BlendNow(p.fromId, p.toId, progress)
         if (p.beats && t.isPlaying) alignBeats(p, t, progress)
         if (progress >= 1f || ended) {
             t.release()
             tail = null
             shifter = null
+            tailBass = null
+            restoreBass()
             main.volume = 1f
             note("blend ${p.fromId} -> ${p.toId} done in ${SystemClock.elapsedRealtime() - blendStartedAt} ms")
             if (main.playbackParameters.speed != 1f) {
@@ -617,7 +644,15 @@ class MixEngine(
         return 100
     }
 
+    /** The main player always ends a blend (done, stopped or skipped) with its full bass. */
+    private fun restoreBass() {
+        swapping = false
+        swapped = false
+        mainBass?.setBass(1f)
+    }
+
     private fun finish() {
+        restoreBass()
         state.blend.value = null
         state.mark.value = null
         catchUpUntil = 0L
@@ -648,6 +683,8 @@ class MixEngine(
         tail?.let { runCatching { it.release() } }
         tail = null
         shifter = null
+        tailBass = null
+        restoreBass()
         if (main.volume != 1f) main.volume = 1f
         if (main.playbackParameters.speed != 1f) main.playbackParameters = at(1f)
         if (phase == Phase.PREPARED || phase == Phase.SYNCING) failed?.let { fromId ->
@@ -673,6 +710,26 @@ class MixEngine(
         private const val WENT_BACK_SLACK_MS = 1_000L
         /** The longest [idle] waits between looks: a song started over may have played this far on by the next one. */
         private const val IDLE_LOOK_MS = 2_500L
+
+        /**
+         * Where a blend of [lengthMs] swaps the songs' bass (0..1 of it): its middle, moved to a whole number of bars
+         * from the blend's start (which is on a beat) when the ending song's beat ([beatMs]) is known, or whole beats
+         * when a bar is too long for the blend. Never right at either end.
+         */
+        fun bassSwapAt(lengthMs: Long, beatMs: Double?): Float {
+            if (lengthMs <= 0) return 0.5f
+            val half = lengthMs / 2.0
+            val at = beatMs?.takeIf { it > 0 }?.let { beat ->
+                val bar = beat * 4
+                listOf(bar, beat).firstNotNullOfOrNull { step ->
+                    (Math.round(half / step) * step).takeIf { it >= step && it <= lengthMs - step }
+                }
+            } ?: half
+            return (at / lengthMs).toFloat().coerceIn(0.2f, 0.8f)
+        }
+
+        /** About how far ahead of the speaker the audio chain works: the swap is turned this much early. */
+        private const val SWAP_LEAD_MS = 120L
 
         /** A guarded early transition must still leave enough time to prepare; otherwise the normal ending is used. */
         fun usableEarlyStart(atMs: Long?, positionMs: Long, durationMs: Long): Long? = atMs?.takeIf {

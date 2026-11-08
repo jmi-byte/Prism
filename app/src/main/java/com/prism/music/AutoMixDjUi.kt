@@ -355,7 +355,7 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
             !settings.mixAuto -> "${settings.mixSeconds} s blend"
             plan.estimated -> "Longer blend"
             else -> "Short blend"
-        }}"
+        }}${if (settings.sound.djEffects) " · Bass swap" else ""}"
         next == null -> "Add another song for a transition"
         exactDecision != null -> "Analysis complete — no safe early cue for this pair"
         else -> "Analysing the current and next song…"
@@ -484,6 +484,15 @@ private fun MixSettings(c: AppContainer) {
                     // AutoMix runs its own blends; Prism's separate Crossfade and DJ mode would compete with it.
                     if (on) { c.settings.setMix(false); c.dj.setOn(false) }
                 }
+            }
+        }
+        item {
+            SettingCard {
+                SwitchRow(
+                    "DJ effects",
+                    "Bass swap: the next song comes in with its bass cut, then the two swap bass on a beat halfway through, so the low ends never pile up. Off: plain crossfades.",
+                    settings.sound.djEffects,
+                ) { c.settings.setDjEffects(it) }
             }
         }
         item {

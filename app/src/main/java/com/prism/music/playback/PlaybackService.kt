@@ -104,6 +104,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     /** "Pause when muted" (#157). */
     private val muteWatch by lazy { MuteWatch(this, player) { c.settings.current.behavior.pauseOnMute } }
     private val normalizer = NormalizerProcessor()
+    /** Veloura's DJ effects: the main player's bass knob, turned by Mix during a bass swap. */
+    private val mainBass = BassSwapProcessor()
     private var songLoudness: Float? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -172,7 +174,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
                     // was left out (#210).
                     .setAudioProcessorChain(
                         EdgeSilenceProcessor.Chain(
-                            edges, arrayOf(vocals, edges, headphoneEq, spatial, normalizer, androidx.media3.exoplayer.audio.TeeAudioProcessor(VisualizerTap)),
+                            edges, arrayOf(vocals, edges, headphoneEq, spatial, mainBass, normalizer, androidx.media3.exoplayer.audio.TeeAudioProcessor(VisualizerTap)),
                         )
                     )
                     .build()
@@ -408,6 +410,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             earlyIn = ::intelligentAutoMixEntry,
             earlyEstimated = ::intelligentAutoMixEstimated,
             earlyLength = { c.settings.current.let { s -> if (s.mixAuto) null else s.mixSeconds * 1000L } },
+            mainBass = mainBass.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ },
+            bassSwap = { com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.sound.djEffects },
         ).also { it.start() }
         // Prism Connect: the speaker or TV being cast to plays what this player plays, and its volume is the session's.
         sessionPlayer.remote = object : LyricsOverlayPlayer.Remote {
@@ -522,7 +526,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
      * effects (spatial audio, the ending song's normalization, and the equalizer through the shared audio
      * session), and no audio focus of its own.
      */
-    private fun buildTailPlayer(shift: ShiftProcessor): ExoPlayer {
+    private fun buildTailPlayer(shift: ShiftProcessor, bass: BassSwapProcessor?): ExoPlayer {
         val s = c.settings.current
         val tailSpatial = SpatialAudioProcessor().apply { configure(s.spatial, s.spatialAmount) }
         val tailNormalizer = NormalizerProcessor().apply { setGainDb(normalizeGainDb) }
@@ -533,7 +537,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
                 DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(enableFloatOutput || s.lossless)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                    .setAudioProcessors(arrayOf(shift, tailEq, tailSpatial, tailNormalizer))
+                    .setAudioProcessors(listOfNotNull<androidx.media3.common.audio.AudioProcessor>(shift, tailEq, tailSpatial, bass, tailNormalizer).toTypedArray())
                     .build()
 
             override fun buildAudioRenderers(
