@@ -58,7 +58,7 @@ class MixEngine(
     /** Scans a song from what's on the phone (no network), if it hasn't been ([MixTempo.measure]). */
     private val scanFromPhone: (String) -> Unit,
     /** A second player for the ending song: same sources and effects as the main one (plus [ShiftProcessor] first), no audio focus. */
-    private val buildTail: (ShiftProcessor, DjEqProcessor?) -> ExoPlayer,
+    private val buildTail: (ShiftProcessor, DjEqProcessor?, com.prism.music.playback.sing.VocalStemProcessor?) -> ExoPlayer,
     /** A blend is over (done or stopped) and the main player is back to normal: the listener's own speed can return. */
     private val onSettled: () -> Unit = {},
     /** The pitch the music plays at (Sing's key, Reddit R6): blends change the speed only, never the key. */
@@ -81,6 +81,14 @@ class MixEngine(
     private val djStyle: () -> com.prism.music.data.prefs.DjStyle? = { null },
     /** Moves on to the next song now, without a blend (a Next blend that couldn't be made): at its cue when it has one. */
     private val skipNow: () -> Unit = { main.seekToNextMediaItem() },
+    /** The main player's vocals processor (Sing's), for a mashup's incoming beat without its voice; null without. */
+    private val mainVocals: com.prism.music.playback.sing.VocalStemProcessor? = null,
+    /** Separated vocals, for the tail's acapella in a mashup; null where there are none. */
+    private val stemSource: com.prism.music.playback.sing.VocalStemProcessor.Source? = null,
+    /** A song's vocals are separated (by id). */
+    private val stemsFor: (String) -> Boolean = { false },
+    /** A saved mix's exact transition for this pair (from, to ids), replayed as it was; null plans afresh. */
+    private val pinned: (String, String) -> MixPoint? = { _, _ -> null },
 ) {
     /** The main player at [speed], in the music's key. */
     private fun at(speed: Float) = PlaybackParameters(speed, pitch())
@@ -133,6 +141,11 @@ class MixEngine(
     /** This blend is a mashup; its stage: 0 coming in, 1 vocals over the beat, 2 the new song whole. */
     private var mashing = false
     private var mashStage = 0
+    /** The ending song's vocals processor on the tail (a mashup with its vocals separated); null otherwise. */
+    private var tailVocals: com.prism.music.playback.sing.VocalStemProcessor? = null
+    /** The incoming song's vocals are separated: the mashup takes them out on the main player. */
+    private var mainStems = false
+    private var midCutDropped = false
     /** This blend echoes the ending song out: 0 not yet, 1 sending into the echo, 2 cut (only its echoes left). */
     private var echoing = false
     private var echoStage = 0
@@ -331,7 +344,15 @@ class MixEngine(
         val shift = ShiftProcessor()
         val bass = mainBass?.let { DjEqProcessor() }
         tailBass = bass
-        val t = buildTail(shift, bass)
+        // A mashup with separated vocals: the tail's processor reads the ending song's, for its acapella.
+        val mashupStems = p.dj == DjBlend.MASHUP && stemSource != null && stemsFor(p.fromId)
+        val stems = if (mashupStems) com.prism.music.playback.sing.VocalStemProcessor(stemSource!!).apply {
+            mashMode = com.prism.music.playback.sing.VocalStemProcessor.MASH_PRIME
+        } else null
+        tailVocals = stems
+        mainStems = p.dj == DjBlend.MASHUP && mainVocals != null && stemsFor(p.toId)
+        if (p.dj == DjBlend.MASHUP) note("mashup vocals: ending song ${if (mashupStems) "separated" else "EQ only"}, next song ${if (mainStems) "separated" else "EQ only"}")
+        val t = buildTail(shift, bass, stems)
         shifter = shift
         t.volume = 0f
         t.setMediaItem(item.buildUpon().build())
@@ -408,11 +429,18 @@ class MixEngine(
         // then invalidated the prepared plan on every tick.
         val nextDur = knownDurationMs(next) ?: Long.MAX_VALUE
         val rawEarly = earlyStart(item, next)
+        val forcedAt = forcedFor(item)?.takeIf { it < dur }
+        // A saved mix replayed: its transition for this pair as it was (where it left, where the next came in, how long),
+        // while there's still time to get ready for it.
+        val pin = if (forcedAt == null) pinned(item.mediaId, next.mediaId)?.takeIf {
+            it.startMs in 1_000 until dur - 1_000 && it.startMs - main.currentPosition > LEAD_MS + PREPARE_MS && it.lengthMs >= 1_000
+        } else null
         // A Next blend starts where the listener asked; otherwise AutoMix's own early point, while there's time for it.
-        val early = forcedFor(item)?.takeIf { it < dur } ?: usableEarlyStart(rawEarly, main.currentPosition, dur)
+        val early = forcedAt ?: pin?.startMs ?: usableEarlyStart(rawEarly, main.currentPosition, dur)
         // DJ effects need room to be heard: on Automatic, a mid-song DJ blend lasts about 8 s (whole bars on the beat).
         val djWanted = mainBass != null && djStyle() != null
         val requestedLength = when {
+            pin != null -> pin.lengthMs
             early == null -> chosenLength(item, next, a, b, length)
             // A mashup needs a few bars of the two together: about 12 s.
             djWanted && earlyLength() == null && djStyle() == com.prism.music.data.prefs.DjStyle.MASHUP -> earlyBlendLengthMs(a, b, fixedMs = MASHUP_BLEND_MS)
@@ -423,7 +451,9 @@ class MixEngine(
         if (len < 1000 || dur < 30_000) return noBlend(item, "a song too short to blend (${dur / 1000} s, next ${nextDur.takeIf { it != Long.MAX_VALUE }?.let { it / 1000 } ?: "?"} s)")
         val end = (a?.lastSoundMs?.takeIf { it in dur / 2..dur } ?: dur)
         var start = early ?: end - len
-        val guardedIn = if (early != null && nextDur != Long.MAX_VALUE) {
+        val guardedIn = if (pin != null) {
+            pin.inMs.takeIf { it >= 0 && it < nextDur - 10_000 }
+        } else if (early != null && nextDur != Long.MAX_VALUE) {
             earlyIn(item, next)?.takeIf { it > 0 && it < nextDur - 10_000 }
         } else null
         // Silence before the next song's music is skipped (up to 10 s; a quiet intro is music, and stays).
@@ -456,7 +486,12 @@ class MixEngine(
         }
         if (early == null && start < dur / 2) return noBlend(item, "the blend would start before the song's middle")
         val swapAt = bassSwapAt(len, if (beats && a != null) a.periodMs else null)
-        val dj = if (mainBass == null) DjBlend.PLAIN else DjBlends.resolve(djStyle(), beats, a?.steady == true)
+        val dj = if (mainBass == null) DjBlend.PLAIN else {
+            // A saved mix's blend as it was mixed (a mashup only where the beats line up again).
+            pin?.dj?.let { d -> runCatching { DjBlend.valueOf(d) }.getOrNull() }?.takeIf { it != DjBlend.MASHUP || beats }
+                ?: DjBlends.resolve(djStyle(), beats, a?.steady == true)
+        }
+        if (pin != null) note("saved mix point for ${item.mediaId} -> ${next.mediaId}: at ${pin.startMs} ms, in at ${pin.inMs} ms, ${pin.lengthMs} ms")
         val echoDelay = DjBlends.echoDelayMs(a?.takeIf { it.steady }?.periodMs)
         return Plan(item.mediaId, next.mediaId, toIndex, start, inMs, len, ratio, beats, beatMs, early, guardedIn, swapAt, dj, echoDelay)
     }
@@ -596,6 +631,8 @@ class MixEngine(
             return 10
         }
         // Hand over: the tail carries the ending song on; the main player moves to the next one, silent.
+        // Kept as it was done, for "Save this mix".
+        state.history.value = (state.history.value + MixPoint(p.fromId, p.toId, p.startMs, p.inMs, p.lengthMs, p.dj.name)).takeLast(300)
         forced = null
         t.volume = 1f
         main.volume = 0f
@@ -608,7 +645,13 @@ class MixEngine(
         // Mashup: the incoming song comes in as beat and bass (its vocal range dipped), the outgoing keeps everything.
         mashing = effects && p.dj == DjBlend.MASHUP
         mashStage = 0
-        if (mashing) { mainBass?.setMidCut(1f); tailBass?.setBass(1f) }
+        if (mashing) {
+            mainBass?.setMidCut(1f)
+            tailBass?.setBass(1f)
+            midCutDropped = false
+            // Its separated vocals taken out once they line up (in a couple of seconds); the EQ dip covers till then.
+            if (mainStems) mainVocals?.apply { mashMode = com.prism.music.playback.sing.VocalStemProcessor.MASH_CUT; mashAmount = 1f }
+        }
         echoStage = 0
         if (echoing) tailBass?.setEchoDelay(p.echoDelayMs)
         if (p.dj != DjBlend.PLAIN) note("DJ effects: ${p.dj.name.lowercase()}")
@@ -689,18 +732,32 @@ class MixEngine(
         }
         if (mashing) {
             val ahead = progress + SWAP_LEAD_MS.toFloat() / p.lengthMs
-            if (mashStage == 0 && ahead >= MASH_VOCALS_AT) {
-                // The old song down to its voice and melody (bass gone, highs trimmed) over the new song's beat.
-                tailBass?.setBass(0f)
-                tailBass?.setLowPass(MASH_VOCAL_TOP_HZ)
-                mashStage = 1
-                note("mashup: vocals over the beat at %.2f".format(progress))
-            } else if (mashStage == 1 && ahead >= MASH_RESOLVE_AT) {
-                // The new song whole again; the old one's voice sweeps away.
+            // The incoming song's own vocals are out: the EQ dip isn't needed (its mids come back whole).
+            if (mainStems && !midCutDropped && mashStage < 2 && mainVocals?.cutting == true) {
                 mainBass?.setMidCut(0f)
+                midCutDropped = true
+                note("mashup: next song's vocals out at %.2f".format(progress))
+            }
+            if (mashStage == 0 && ahead >= MASH_VOCALS_AT) {
+                val v = tailVocals
+                if (v != null) {
+                    // The old song's own acapella over the new song's beat.
+                    v.mashMode = com.prism.music.playback.sing.VocalStemProcessor.MASH_SOLO
+                    v.mashAmount = 1f
+                } else {
+                    // The old song down to its voice and melody (bass gone, highs trimmed) over the new song's beat.
+                    tailBass?.setBass(0f)
+                    tailBass?.setLowPass(MASH_VOCAL_TOP_HZ)
+                }
+                mashStage = 1
+                note("mashup: ${if (v != null) "acapella" else "vocals (EQ)"} over the beat at %.2f".format(progress))
+            } else if (mashStage == 1 && ahead >= MASH_RESOLVE_AT) {
+                // The new song whole again, its own voice back; the old one's voice goes.
+                mainBass?.setMidCut(0f)
+                mainVocals?.mashAmount = 0f
                 mashStage = 2
             }
-            if (mashStage == 2) {
+            if (mashStage == 2 && tailVocals == null) {
                 val t = ((ahead - MASH_RESOLVE_AT) / (1f - MASH_RESOLVE_AT)).coerceIn(0f, 1f)
                 tailBass?.setLowPass((MASH_VOCAL_TOP_HZ * (SWEEP_OUT_TO_HZ / MASH_VOCAL_TOP_HZ).toDouble().pow(t.toDouble())).toFloat())
             }
@@ -729,6 +786,8 @@ class MixEngine(
             tail = null
             shifter = null
             tailBass = null
+            tailVocals?.release()
+            tailVocals = null
             restoreBass()
             main.volume = 1f
             note("blend ${p.fromId} -> ${p.toId} done in ${SystemClock.elapsedRealtime() - blendStartedAt} ms")
@@ -805,6 +864,8 @@ class MixEngine(
         echoStage = 0
         mashing = false
         mashStage = 0
+        mainStems = false
+        mainVocals?.apply { mashAmount = 0f; mashMode = com.prism.music.playback.sing.VocalStemProcessor.MASH_OFF }
         mainBass?.setBass(1f)
         mainBass?.setMidCut(0f)
         mainBass?.setLowPass(SweepFilter.OPEN_HZ)
@@ -845,6 +906,8 @@ class MixEngine(
         tail = null
         shifter = null
         tailBass = null
+        tailVocals?.release()
+        tailVocals = null
         restoreBass()
         if (main.volume != 1f) main.volume = 1f
         if (main.playbackParameters.speed != 1f) main.playbackParameters = at(1f)
@@ -1127,7 +1190,13 @@ data class BlendIn(val songId: String, val inMs: Long, val lengthMs: Long)
 data class BlendNow(val fromId: String, val toId: String, val progress: Float, val dj: DjBlend = DjBlend.PLAIN)
 
 /** What [MixEngine] tells the player about crossfades (one per app, [com.prism.music.AppContainer.mixState]). */
+/** One transition as it was mixed: where the ending song was left, where the next came in, how long, and how. */
+@kotlinx.serialization.Serializable
+data class MixPoint(val fromId: String, val toId: String, val startMs: Long, val inMs: Long, val lengthMs: Long, val dj: String)
+
 class MixState {
+    /** The transitions mixed this session, oldest first (the last 300). */
+    val history = kotlinx.coroutines.flow.MutableStateFlow<List<MixPoint>>(emptyList())
     val mark = kotlinx.coroutines.flow.MutableStateFlow<BlendMark?>(null)
     val blend = kotlinx.coroutines.flow.MutableStateFlow<BlendNow?>(null)
     /** The song playing came in from a crossfade: kept while it plays (its bar's start keeps the fade-in's shape). */

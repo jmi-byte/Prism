@@ -93,6 +93,8 @@ data class SavedMix(
     /** The transition style it was mixed with ([TransitionStyle] name). */
     val style: String,
     val songs: List<Song>,
+    /** Each transition as it was mixed (the ones played before saving), replayed the same way. */
+    val points: List<com.prism.music.playback.MixPoint> = emptyList(),
 )
 
 /**
@@ -120,11 +122,26 @@ class SavedMixes(private val context: Context) {
         }
     }
 
-    fun save(name: String, songs: List<Song>, style: TransitionStyle): SavedMix {
-        val mix = SavedMix(java.util.UUID.randomUUID().toString(), name.ifBlank { "My mix" }, System.currentTimeMillis(), style.name, songs)
+    fun save(name: String, songs: List<Song>, style: TransitionStyle, history: List<com.prism.music.playback.MixPoint> = emptyList()): SavedMix {
+        val mix = SavedMix(java.util.UUID.randomUUID().toString(), name.ifBlank { "My mix" }, System.currentTimeMillis(), style.name, songs, pointsFor(songs, history))
         write(listOf(mix) + _mixes.value)
         return mix
     }
 
     fun delete(id: String) = write(_mixes.value.filter { it.id != id })
+
+    /** The saved mix playing now: its transitions are replayed as they were. */
+    @Volatile private var pins: Map<Pair<String, String>, com.prism.music.playback.MixPoint> = emptyMap()
+
+    /** Plays [mix]'s transitions as saved from now on (the queue itself is the caller's). */
+    fun replay(mix: SavedMix) { pins = mix.points.associateBy { it.fromId to it.toId } }
+
+    /** The saved transition from [fromId] into [toId] in the mix being replayed, if it has one. */
+    fun pin(fromId: String, toId: String): com.prism.music.playback.MixPoint? = pins[fromId to toId]
+
+    companion object {
+        /** For each pair of neighbours in [songs], the last time that pair was mixed in [history]. Pure, so it's tested. */
+        fun pointsFor(songs: List<Song>, history: List<com.prism.music.playback.MixPoint>): List<com.prism.music.playback.MixPoint> =
+            songs.zipWithNext().mapNotNull { (a, b) -> history.lastOrNull { it.fromId == a.id && it.toId == b.id } }
+    }
 }

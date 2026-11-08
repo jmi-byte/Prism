@@ -634,7 +634,13 @@ private fun SaveMixDialog(c: AppContainer, onClose: () -> Unit) {
         title = { Text("Save this mix") },
         text = {
             Column {
-                Text("${songs.size} songs in the order they play, mixed ${TransitionStyle.of(settings.sound.djEffects, settings.sound.djStyle).label}. Find it under Library → Mixes.", color = VelouraMuted, fontSize = 13.sp)
+                val points = remember(songs) { SavedMixes.pointsFor(songs, c.mixState.history.value).size }
+                Text(
+                    "${songs.size} songs in the order they play, mixed ${TransitionStyle.of(settings.sound.djEffects, settings.sound.djStyle).label}" +
+                        (if (points > 0) ", with the $points transitions so far kept exactly as they were mixed" else "") +
+                        ". Find it under Library → Mixes.",
+                    color = VelouraMuted, fontSize = 13.sp,
+                )
                 OutlinedTextField(name, { name = it.take(60) }, Modifier.fillMaxWidth().padding(top = 10.dp), singleLine = true, label = { Text("Name") })
                 Row(Modifier.padding(top = 8.dp).clickable { toYouTube = !toYouTube }, verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(toYouTube, { toYouTube = it })
@@ -645,7 +651,7 @@ private fun SaveMixDialog(c: AppContainer, onClose: () -> Unit) {
         confirmButton = {
             TextButton({
                 if (songs.isEmpty()) { onClose(); return@TextButton }
-                c.savedMixes.save(name, songs, TransitionStyle.of(settings.sound.djEffects, settings.sound.djStyle))
+                c.savedMixes.save(name, songs, TransitionStyle.of(settings.sound.djEffects, settings.sound.djStyle), c.mixState.history.value)
                 if (toYouTube) scope.launch {
                     val made = runCatching { withContext(Dispatchers.IO) { c.ytm.createPlaylist(name, VelouraPlaylists.saveableIds(songs), "A Veloura mix") } }.getOrNull()
                     if (made != null) c.library.playlistChanged(made)
@@ -1031,12 +1037,13 @@ private fun VelouraLibrary(c: AppContainer, cache: LibraryCache, onConnect: () -
                 SavedMixRow(
                     SavedMixUi(
                         m.id, m.name,
-                        "${m.songs.size} songs · ${style.label} · " + java.text.SimpleDateFormat("d MMM", java.util.Locale.ENGLISH).format(java.util.Date(m.savedAt)),
+                        "${m.songs.size} songs · ${style.label} · " + (if (m.points.isNotEmpty()) "${m.points.size} mix points · " else "") + java.text.SimpleDateFormat("d MMM", java.util.Locale.ENGLISH).format(java.util.Date(m.savedAt)),
                         m.songs.map { it.thumbnail },
                     ),
                     onPlay = {
                         // As it was mixed: its transition style, AutoMix on, the songs in their order.
                         autoMixOn(c)
+                        c.savedMixes.replay(m)
                         c.settings.setDjEffects(style.dj != null)
                         style.dj?.let(c.settings::setDjStyle)
                         c.player.playQueue(m.songs, 0, QueueSource(QueueKind.PLAYLIST, m.name))

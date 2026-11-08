@@ -697,7 +697,7 @@ enum class TransitionStyle(val label: String, val detail: String, val dj: com.pr
     DJ_CLUB("DJ · Club", "Bass swap and filter sweep: the old song's highs roll away as the new one opens up.", com.prism.music.data.prefs.DjStyle.CLUB),
     DJ_SMOOTH("DJ · Smooth", "Bass swap only: subtle, best on headphones or speakers with bass.", com.prism.music.data.prefs.DjStyle.SMOOTH),
     DJ_ECHO("DJ · Echo out", "The old song is thrown into a beat-timed echo and trails away as the new one comes in.", com.prism.music.data.prefs.DjStyle.ECHO),
-    DJ_MASHUP("DJ · Mashup", "For a few bars the old song's vocals ride the new song's beat. Only when the beats line up; otherwise Club.", com.prism.music.data.prefs.DjStyle.MASHUP);
+    DJ_MASHUP("DJ · Mashup", "For a few bars the old song's acapella rides the new song's beat (vocals separated on the phone, on Wi-Fi). Only when the beats line up; otherwise Club.", com.prism.music.data.prefs.DjStyle.MASHUP);
 
     companion object {
         fun of(djEffects: Boolean, style: com.prism.music.data.prefs.DjStyle): TransitionStyle =

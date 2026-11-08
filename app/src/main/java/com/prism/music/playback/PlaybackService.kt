@@ -300,6 +300,12 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch { c.bestParts.current.collect { hookIfAsked(it) } }
         // Veloura's Tempo lock, applied as soon as it's switched or moved.
         if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch { c.settings.flow.map { it.sound.tempoLock }.distinctUntilChanged().drop(1).collect { applySongSpeed() } }
+        // Mashup picked (or dropped) mid-song: the vocals around the next blend asked for now, not at the next song.
+        if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch {
+            c.settings.flow.map { Triple(it.intelligentAutoMix, it.sound.djEffects, it.sound.djStyle) }.distinctUntilChanged().drop(1).collect {
+                c.player.currentSong.value?.let(::mashupStems)
+            }
+        }
         // Veloura's AutoMix button shows whether it's on.
         if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch { c.settings.flow.map { it.intelligentAutoMix }.distinctUntilChanged().drop(1).collect { updateButtons() } }
         // The waveform progress bar picked: the playing song (and what's next) get their outlines now, not at the next song.
@@ -427,6 +433,10 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             mainBass = mainBass.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ },
             djStyle = { c.settings.current.sound.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ && it.djEffects }?.djStyle },
             skipNow = { if (!jumpToNextCue()) player.seekToNextMediaItem() },
+            mainVocals = vocals.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ },
+            stemSource = c.sing.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ },
+            stemsFor = { id -> c.sing.hasStems(id) },
+            pinned = { from, to -> c.savedMixes.pin(from, to) },
         ).also { it.start() }
         // Prism Connect: the speaker or TV being cast to plays what this player plays, and its volume is the session's.
         sessionPlayer.remote = object : LyricsOverlayPlayer.Remote {
@@ -576,7 +586,20 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
      * effects (spatial audio, the ending song's normalization, and the equalizer through the shared audio
      * session), and no audio focus of its own.
      */
-    private fun buildTailPlayer(shift: ShiftProcessor, bass: DjEqProcessor?): ExoPlayer {
+    /**
+     * Mashups (Veloura): the playing song's and the next one's vocals separated (Sing's engine, Sing itself off), so the
+     * blend between them can lay one's acapella over the other's beat. Asked for only while Mashup is the style.
+     */
+    private fun mashupStems(song: Song) {
+        if (!com.prism.music.BuildConfig.AUTOMIX_DJ) return
+        val s = c.settings.current
+        val wanted = s.intelligentAutoMix && s.sound.djEffects && s.sound.djStyle == com.prism.music.data.prefs.DjStyle.MASHUP && !song.isLive
+        if (!wanted) { c.sing.prepareForMix(emptyList()); return }
+        val next = c.player.upNext.value.firstOrNull()?.let { c.player.queue.value.getOrNull(it)?.song }
+        c.sing.prepareForMix(listOfNotNull(song, next), player.currentPosition)
+    }
+
+    private fun buildTailPlayer(shift: ShiftProcessor, bass: DjEqProcessor?, stems: com.prism.music.playback.sing.VocalStemProcessor?): ExoPlayer {
         val s = c.settings.current
         val tailSpatial = SpatialAudioProcessor().apply { configure(s.spatial, s.spatialAmount) }
         val tailNormalizer = NormalizerProcessor().apply { setGainDb(normalizeGainDb) }
@@ -587,7 +610,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
                 DefaultAudioSink.Builder(context)
                     .setEnableFloatOutput(enableFloatOutput || s.lossless)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                    .setAudioProcessors(listOfNotNull<androidx.media3.common.audio.AudioProcessor>(shift, tailEq, tailSpatial, bass, tailNormalizer).toTypedArray())
+                    .setAudioProcessors(listOfNotNull<androidx.media3.common.audio.AudioProcessor>(stems, shift, tailEq, tailSpatial, bass, tailNormalizer).toTypedArray())
                     .build()
 
             override fun buildAudioRenderers(
@@ -791,6 +814,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
                     applySongSpeed()
                 }
             }
+            mashupStems(song)
             // Not mid-blend: the blend sets the tempo itself, and the picked speed comes back once it settles.
             if (player.playbackParameters.speed != speed && (lastWasEpisode || !mixing())) player.setPlaybackSpeed(speed)
             // Watching a podcast isn't a wish for music videos: music after it starts as the song.

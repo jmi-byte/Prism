@@ -157,7 +157,23 @@ class Sing(private val c: AppContainer) : VocalStemProcessor.Source {
     private val alwaysReady: Boolean get() = c.settings.current.singAlwaysReady
 
     /** Songs are being got ready: Sing is on, or set to get them ready anyway (not after Sing let go of the player). */
-    private val working: Boolean get() = onNow || (alwaysReady && !heldBack)
+    private val working: Boolean get() = onNow || ((alwaysReady || forMix) && !heldBack)
+
+    /** Veloura's mashups want vocals separated for the songs around the next blend, with Sing itself off. */
+    @Volatile private var forMix = false
+
+    /**
+     * Veloura's mashups: separates [songs] (the playing one and the next) so a blend can lay one's vocals over the other's
+     * beat; empty stops asking. The quick way at least, which needs no download; the song's own separation where Sing's
+     * engine is on the phone.
+     */
+    fun prepareForMix(songs: List<Song>, playheadMs: Long = 0) {
+        forMix = songs.isNotEmpty()
+        if (songs.isNotEmpty()) prepare(songs, playheadMs)
+    }
+
+    /** [id]'s vocals are separated (the song's own or the quick way's), whole. */
+    fun hasStems(id: String): Boolean = store.complete(id) || quickStore.complete(id)
 
     /** When Sing was last switched off (nanoTime): the song in hand is finished for [GRACE_NS] more, not thrown away. */
     @Volatile private var offAt = 0L
@@ -351,7 +367,7 @@ class Sing(private val c: AppContainer) : VocalStemProcessor.Source {
      * and what's already queued: each song's quick stand-in first, then its own separation ([nextPass]).
      */
     fun prepare(songs: List<Song>, /** Where the first of [songs] is playing (ms; read on the main thread). */ playheadMs: Long = 0) {
-        if (!working || !engineReady()) return
+        if (!working || !(engineReady() || forMix)) return
         songs.firstOrNull()?.let { if (playheadMs > 0) playhead[it.id] = playheadMs to System.nanoTime() else playhead.remove(it.id) }
         val todo = songs.filter { canSing(it) && (!quickDone(it.id) || needsOwn(it.id)) }
         synchronized(wanted) {

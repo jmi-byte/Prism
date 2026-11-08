@@ -64,6 +64,19 @@ class VocalStemProcessor(private val sing: Source) : BaseAudioProcessor() {
         fun close() { reader?.close(); reader = null; readerFor = null }
     }
 
+    /**
+     * Veloura's mashups, set by the mix engine ([MASH_OFF], [MASH_PRIME], [MASH_CUT], [MASH_SOLO]): the vocals are read and
+     * lined up without changing the sound (prime), taken out (cut: the song's beat alone) or kept alone (solo: the
+     * song's acapella), as much as [mashAmount] says, gliding. Works with Sing itself off.
+     */
+    @Volatile var mashMode = MASH_OFF
+    @Volatile var mashAmount = 0f
+    private var solo = 0f
+    /** The vocals are being taken out now (lined up, most of the way). */
+    val cutting: Boolean get() = gain > 0.5f
+    /** Only the vocals are heard now (most of the way). */
+    val soloing: Boolean get() = solo > 0.5f
+
     private val full = Stems { sing.store }
     private val quick = Stems { sing.quickStore }
     /** How much of the song's own vocals (rather than the quick way's) is subtracted, gliding between the two. */
@@ -107,6 +120,9 @@ class VocalStemProcessor(private val sing: Source) : BaseAudioProcessor() {
 
     private val aligner = Thread({ alignLoop() }, "PrismSingAlign").apply { isDaemon = true; start() }
 
+    /** Stops the alignment thread, for a processor that's done with (a mix's second player's). */
+    fun release() = aligner.interrupt()
+
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         val enc = inputAudioFormat.encoding
         if (enc != C.ENCODING_PCM_16BIT && enc != C.ENCODING_PCM_FLOAT) return AudioProcessor.AudioFormat.NOT_SET
@@ -138,6 +154,7 @@ class VocalStemProcessor(private val sing: Source) : BaseAudioProcessor() {
         position = if (streamMetadata.positionOffsetUs == C.TIME_UNSET) 0 else streamMetadata.positionOffsetUs * rate / 1_000_000
         identify()
         fade = 0f
+        solo = 0f
         synchronized(ringLock) { ringFilled = 0 }
         recheck = true
         Log.d(TAG, "flush: song=$songId at ${position * 1000 / rate} ms (period ${periodFrames * 1000 / rate.coerceAtLeast(1)} ms)")
@@ -213,8 +230,9 @@ class VocalStemProcessor(private val sing: Source) : BaseAudioProcessor() {
         val id = songId
         // Sing is off and nothing is being taken out (or gliding out): the audio goes straight through, untouched, and
         // only the place in the song is kept. It used to go through the whole sample loop for nothing.
-        if (!sing.onNow && gain < 1e-5f && fade < 1e-4f) {
-            gain = 0f; fade = 0f
+        val mash = mashMode
+        if (!sing.onNow && mash == MASH_OFF && gain < 1e-5f && fade < 1e-4f && solo < 1e-4f) {
+            gain = 0f; fade = 0f; solo = 0f
             val bytes = frames * (if (float) 4 else 2) * channels
             val limit = input.limit()
             input.limit(input.position() + bytes)
@@ -223,7 +241,7 @@ class VocalStemProcessor(private val sing: Source) : BaseAudioProcessor() {
             position += frames
             return
         }
-        val on = sing.onNow && id != null
+        val on = (sing.onNow || mash != MASH_OFF) && id != null
         // The vocals may not exist yet when the song starts (Sing was just switched on), or be started afresh in a new
         // file: while they're missing or short of where the song is, they're looked for again every quarter second.
         // Two sets (1.8.x): the song's own (the full or light way) and the quick way's stand-ins, done first in seconds;
@@ -244,7 +262,11 @@ class VocalStemProcessor(private val sing: Source) : BaseAudioProcessor() {
         val blendTarget = if (ownHere) 1f else 0f
         val vf = full.buf
         val vq = quick.buf
-        val level = sing.levelNow
+        // How much voice stays: Sing's level (all of it with Sing off), less what a mashup's cut takes.
+        val singLevel = if (sing.onNow) sing.levelNow else 1f
+        val level = if (mash == MASH_CUT) minOf(singLevel, 1f - mashAmount.coerceIn(0f, 1f)) else singLevel
+        // A mashup's acapella needs the vocals where the song is, not their match (they come from the same decode).
+        val soloTarget = if (mash == MASH_SOLO && (reaches(realFull) || reaches(realQuick))) mashAmount.coerceIn(0f, 1f) else 0f
         val glide = 1f - exp(-1f / (0.03f * rate))
         val record = haveAny
         // One buffer kept and reused (a new array for every buffer of audio was garbage for the collector to chase).
@@ -254,17 +276,18 @@ class VocalStemProcessor(private val sing: Source) : BaseAudioProcessor() {
             fade += (target - fade) * glide
             gain += ((1f - level) * fade - gain) * glide
             blend += (blendTarget - blend) * glide
+            solo += (soloTarget - solo) * glide
             var sum = 0f
             for (ch in 0 until channels) {
                 val x = if (float) input.float else input.short / 32768f
                 sum += x
                 val v = when {
-                    !haveAny || gain < 1e-5f -> 0f
+                    !haveAny || (gain < 1e-5f && solo < 1e-5f) -> 0f
                     channels == 1 -> (blend * (vf[f * 2] + vf[f * 2 + 1]) + (1 - blend) * (vq[f * 2] + vq[f * 2 + 1])) * 0.5f
                     ch < 2 -> blend * vf[f * 2 + ch] + (1 - blend) * vq[f * 2 + ch]
                     else -> 0f
                 }
-                val y = x - gain * v
+                val y = (x - gain * v) * (1f - solo) + v * solo
                 if (float) out.putFloat(y) else out.putShort((y * 32767f).roundToInt().coerceIn(-32768, 32767).toShort())
                 inEnergy += x * x; outEnergy += y * y
             }
@@ -300,7 +323,7 @@ class VocalStemProcessor(private val sing: Source) : BaseAudioProcessor() {
         while (true) {
             // Till the vocals line up, looked at more often: the first seconds of Sing are the ones that count.
             try { Thread.sleep(if (matchedFor == null) 250 else 400) } catch (_: InterruptedException) { return }
-            if (!sing.onNow) continue
+            if (!sing.onNow && mashMode == MASH_OFF) continue
             val (id, music, end) = synchronized(ringLock) {
                 if (ringSong == null || ringFilled < rate * ALIGN_SECONDS) return@synchronized Triple(null, null, 0L)
                 val n = rate * ALIGN_SECONDS
@@ -372,6 +395,10 @@ class VocalStemProcessor(private val sing: Source) : BaseAudioProcessor() {
 
     companion object {
         private const val TAG = "PrismSing"
+        const val MASH_OFF = 0
+        const val MASH_PRIME = 1
+        const val MASH_CUT = 2
+        const val MASH_SOLO = 3
         private const val RING_SECONDS = 4
         /** How much of what's playing is matched against the vocals (2 s, 1.8.x: 3 s held the first effect back). */
         private const val ALIGN_SECONDS = 2

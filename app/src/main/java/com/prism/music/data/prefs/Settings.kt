@@ -755,7 +755,7 @@ enum class DjStyle(val label: String, val detail: String) {
     SMOOTH("Smooth", "Bass swap only: the next song comes in without its bass, then the two swap on a beat."),
     CLUB("Club", "Bass swap plus a filter sweep: the outgoing song's highs roll away as the next one opens up."),
     ECHO("Echo out", "The outgoing song is thrown into a beat-timed echo and cut, trailing off as the next song comes in."),
-    MASHUP("Mashup", "For a few bars the old song's vocals ride the new song's beat, then the new song takes over. Needs beats that line up."),
+    MASHUP("Mashup", "For a few bars the old song's own vocals, separated on the phone, ride the new song's beat, then the new song takes over. Needs beats that line up."),
 }
 
 /** How a crossfade's two volumes cross (1.7.8, A1). */
