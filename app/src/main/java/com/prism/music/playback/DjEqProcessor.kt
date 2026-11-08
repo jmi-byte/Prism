@@ -20,11 +20,14 @@ import kotlin.math.sqrt
  *   [BassKill.CUT_DB] down). Mix's bass swap: the incoming song comes in with its bass cut, then the two swap on a beat.
  * - [setLowPass]: a sweepable low-pass filter ([SweepFilter]); at [SweepFilter.OPEN_HZ] or above it is off. Mix's
  *   filter sweep: the outgoing song's highs roll away as it leaves, while the incoming one opens up.
+ * - [setEchoSend] / [setDry] with [setEchoDelay]: a beat-timed echo ([EchoOut]). Mix's echo out: the outgoing song
+ *   is sent into the echo, then cut, so it trails away in repeats.
  */
 @UnstableApi
 class DjEqProcessor : BaseAudioProcessor() {
     private val kill = BassKill()
     private val sweep = SweepFilter()
+    private val echo = EchoOut()
     private var float = false
     private var channels = 2
     /** Reused between buffers: nothing is allocated on the audio thread once it's big enough. */
@@ -38,6 +41,15 @@ class DjEqProcessor : BaseAudioProcessor() {
     /** The low-pass filter's cutoff in Hz; [SweepFilter.OPEN_HZ] (or more) switches it off. Safe from any thread. */
     fun setLowPass(hz: Float) = sweep.setTarget(hz)
 
+    /** The echo's repeat time; set before [setEchoSend] (it makes the echo's memory if needed). */
+    fun setEchoDelay(ms: Double) = echo.setDelay(ms)
+
+    /** 0..1: how much of the sound goes into the echo. Safe from any thread. */
+    fun setEchoSend(level: Float) = echo.setSend(level)
+
+    /** 0..1: the sound itself, apart from its echoes (0 leaves only the echoes). Safe from any thread. */
+    fun setDry(level: Float) = echo.setDry(level)
+
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         val enc = inputAudioFormat.encoding
         if (enc != C.ENCODING_PCM_16BIT && enc != C.ENCODING_PCM_FLOAT) return AudioProcessor.AudioFormat.NOT_SET
@@ -45,6 +57,7 @@ class DjEqProcessor : BaseAudioProcessor() {
         channels = inputAudioFormat.channelCount.coerceAtLeast(1)
         kill.configure(inputAudioFormat.sampleRate, channels)
         sweep.configure(inputAudioFormat.sampleRate, channels)
+        echo.configure(inputAudioFormat.sampleRate, channels)
         return inputAudioFormat
     }
 
@@ -52,7 +65,7 @@ class DjEqProcessor : BaseAudioProcessor() {
         val bytes = inputBuffer.remaining()
         if (bytes == 0) return
         val out = replaceOutputBuffer(bytes)
-        if (kill.idle && sweep.idle) {
+        if (kill.idle && sweep.idle && echo.idle) {
             out.put(inputBuffer)
             out.flip()
             return
@@ -63,6 +76,7 @@ class DjEqProcessor : BaseAudioProcessor() {
         for (i in 0 until samples) buf[i] = if (float) inputBuffer.float else inputBuffer.short / 32768f
         kill.process(buf, samples / channels)
         sweep.process(buf, samples / channels)
+        echo.process(buf, samples / channels)
         for (i in 0 until samples) {
             if (float) out.putFloat(buf[i])
             else out.putShort((buf[i].coerceIn(-1f, 0.99997f) * 32767f).roundToInt().toShort())
@@ -71,8 +85,8 @@ class DjEqProcessor : BaseAudioProcessor() {
         out.flip()
     }
 
-    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) { kill.clearHistory(); sweep.clearHistory() }
-    override fun onReset() { kill.clearHistory(); sweep.clearHistory() }
+    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) { kill.clearHistory(); sweep.clearHistory(); echo.clearHistory() }
+    override fun onReset() { kill.clearHistory(); sweep.clearHistory(); echo.clearHistory() }
 }
 
 /**
@@ -251,5 +265,103 @@ class BassKill {
         /** How long the knob takes to turn (to about two-thirds of the way). */
         const val GLIDE_SEC = 0.04f
         private const val BLOCK = 64
+    }
+}
+
+/**
+ * The echo out's sound, apart from Media3 so it can be unit-tested: a feedback delay ([FEEDBACK] per repeat, each
+ * repeat a little darker through a gentle low-pass), with a send (what goes into it) and a dry level (the sound
+ * itself), both gliding so nothing clicks. The delay's memory is made by [setDelay] (not on the audio thread); while
+ * there's none, or nothing is sent, ringing or cut, the sound passes straight through.
+ */
+class EchoOut {
+    @Volatile private var sendTarget = 0f
+    @Volatile private var dryTarget = 1f
+    @Volatile private var delayMs = 0.0
+    private var send = 0f
+    private var dry = 1f
+    private var rate = 48_000
+    private var channels = 2
+    @Volatile private var memory = FloatArray(0)
+    private var pos = 0
+    private var lp = FloatArray(2)
+    /** Echoes may still be sounding. */
+    private var ringing = false
+    /** Frames in a row the echoes have been inaudible (after the send closed). */
+    private var quietFrames = 0
+
+    fun configure(sampleRate: Int, channelCount: Int) {
+        rate = sampleRate.coerceAtLeast(8_000)
+        channels = channelCount.coerceAtLeast(1)
+        lp = FloatArray(channels)
+        clearHistory()
+    }
+
+    fun setDelay(ms: Double) {
+        // Sized for the longest delay at the rate in use, or 48 kHz if the sound hasn't started yet; the delay itself
+        // is counted in frames as it plays, at the real rate.
+        val size = ((MAX_DELAY_MS / 1000.0 * maxOf(rate, 48_000)).toInt() + 1) * channels
+        if (memory.size < size) memory = FloatArray(size)
+        delayMs = ms.coerceIn(50.0, MAX_DELAY_MS)
+    }
+
+    fun setSend(v: Float) { sendTarget = v.coerceIn(0f, 1f) }
+    fun setDry(v: Float) { dryTarget = v.coerceIn(0f, 1f) }
+
+    val idle: Boolean get() = !ringing && sendTarget == 0f && send == 0f && dryTarget == 1f && dry == 1f
+
+    fun clearHistory() {
+        memory.fill(0f)
+        lp.fill(0f)
+        pos = 0
+        ringing = false
+        quietFrames = 0
+    }
+
+    fun process(buf: FloatArray, frames: Int) {
+        if (idle) return
+        val mem = memory
+        val size = mem.size / channels
+        val d = (delayMs / 1000.0 * rate).toInt().coerceIn(0, maxOf(0, size - 1))
+        // No memory yet (setDelay wasn't called): only the dry level applies.
+        val echoes = size > d && d > 0
+        if (pos >= size) pos = 0
+        val glide = 1f - kotlin.math.exp(-1f / (GLIDE_SEC * rate))
+        val damp = 1f - kotlin.math.exp(-2f * kotlin.math.PI.toFloat() * DAMP_HZ / rate)
+        for (f in 0 until frames) {
+            send = if (kotlin.math.abs(sendTarget - send) < 1e-4f) sendTarget else send + (sendTarget - send) * glide
+            dry = if (kotlin.math.abs(dryTarget - dry) < 1e-4f) dryTarget else dry + (dryTarget - dry) * glide
+            val base = f * channels
+            if (!echoes) {
+                for (ch in 0 until channels) buf[base + ch] *= dry
+                continue
+            }
+            val r = ((pos - d) % size + size) % size
+            var loudest = 0f
+            for (ch in 0 until channels) {
+                val x = buf[base + ch]
+                val wet = mem[r * channels + ch]
+                lp[ch] += (wet - lp[ch]) * damp
+                mem[pos * channels + ch] = send * x + FEEDBACK * lp[ch]
+                buf[base + ch] = dry * x + wet
+                loudest = maxOf(loudest, kotlin.math.abs(wet))
+            }
+            pos = (pos + 1) % size
+            if (send > 0f) { ringing = true; quietFrames = 0 }
+            else if (ringing) {
+                quietFrames = if (loudest < SILENT) quietFrames + 1 else 0
+                // A whole repeat with nothing audible: the echoes have died away.
+                if (quietFrames > d) { ringing = false; quietFrames = 0 }
+            }
+        }
+    }
+
+    companion object {
+        /** Each repeat this loud as the one before (about -6 dB): a handful of audible repeats. */
+        const val FEEDBACK = 0.5f
+        const val MAX_DELAY_MS = 1_200.0
+        private const val DAMP_HZ = 3_000f
+        private const val GLIDE_SEC = 0.015f
+        private const val SILENT = 1e-4f
     }
 }

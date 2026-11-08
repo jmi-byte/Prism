@@ -3,6 +3,10 @@ package com.prism.music
 import com.prism.music.playback.BassKill
 import com.prism.music.playback.MixEngine
 import com.prism.music.playback.SweepFilter
+import com.prism.music.playback.DjBlend
+import com.prism.music.playback.DjBlends
+import com.prism.music.playback.EchoOut
+import com.prism.music.data.prefs.DjStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -118,5 +122,73 @@ class DjEqTest {
         // Both move one way only.
         val steps = (0..20).map { MixEngine.sweepHz(it / 20f, 0.5f) }
         assertTrue(steps.zipWithNext().all { (a, b) -> b.first >= a.first && b.second <= a.second })
+    }
+
+    // Echo out.
+
+    private fun echo(delayMs: Double) = EchoOut().apply { configure(rate, 2); setDelay(delayMs) }
+
+    @Test
+    fun aRestingEchoLeavesTheSoundUntouched() {
+        val e = echo(500.0)
+        val buf = FloatArray(2_000) { (it % 3) / 10f }
+        val copy = buf.copyOf()
+        e.process(buf, 1_000)
+        assertTrue(e.idle)
+        assertTrue(buf.contentEquals(copy))
+    }
+
+    @Test
+    fun aClickSentIntoTheEchoRepeatsOnTheBeatAndDiesAway() {
+        val delay = 4_800 // 100 ms at 48 kHz
+        val e = echo(100.0)
+        e.setSend(1f)
+        // Let the send glide fully open, in silence.
+        e.process(FloatArray(delay * 2), delay)
+        // One click goes in; then the send closes and the song is cut, so only its echoes remain.
+        e.process(floatArrayOf(1f, 1f), 1)
+        e.setSend(0f)
+        e.setDry(0f)
+        val frames = delay * 6
+        val rest = FloatArray(frames * 2)
+        e.process(rest, frames)
+        // The click was frame 0; this buffer starts at frame 1, so repeat k is at k * delay - 1.
+        val peaks = (1..4).map { k ->
+            val at = k * delay - 1
+            (maxOf(0, at - 50) until minOf(frames, at + 50)).maxOf { kotlin.math.abs(rest[it * 2]) }
+        }
+        assertTrue(peaks[0] > 0.5f)
+        assertTrue(peaks.zipWithNext().all { (a, b) -> b < a })
+        // Halfway between repeats: silence (an echo, not a smear).
+        assertTrue(kotlin.math.abs(rest[(delay + delay / 2) * 2]) < 1e-3f)
+    }
+
+    @Test
+    fun cuttingTheDryLeavesOnlyTheEchoes() {
+        val e = echo(500.0)
+        e.setDry(0f)
+        val buf = FloatArray(4_800 * 2) { 0.5f }
+        e.process(buf, 4_800)
+        // After the ~15 ms glide the song itself is gone (nothing was sent, so no echoes either).
+        assertTrue(buf.takeLast(200).all { kotlin.math.abs(it) < 1e-3f })
+    }
+
+    @Test
+    fun autoPicksClubForMatchedBeatsEchoForUnmatchedAndSmoothWithoutABeat() {
+        assertEquals(DjBlend.PLAIN, DjBlends.resolve(null, beatsMatched = true, endingBeatKnown = true))
+        assertEquals(DjBlend.CLUB, DjBlends.resolve(DjStyle.AUTO, beatsMatched = true, endingBeatKnown = true))
+        assertEquals(DjBlend.ECHO, DjBlends.resolve(DjStyle.AUTO, beatsMatched = false, endingBeatKnown = true))
+        assertEquals(DjBlend.SMOOTH, DjBlends.resolve(DjStyle.AUTO, beatsMatched = false, endingBeatKnown = false))
+        // A chosen style is used as it is.
+        assertEquals(DjBlend.ECHO, DjBlends.resolve(DjStyle.ECHO, beatsMatched = true, endingBeatKnown = true))
+        assertEquals(DjBlend.SMOOTH, DjBlends.resolve(DjStyle.SMOOTH, beatsMatched = true, endingBeatKnown = true))
+    }
+
+    @Test
+    fun theEchoRepeatsOnABeatOfTheEndingSong() {
+        assertEquals(500.0, DjBlends.echoDelayMs(500.0), 0.0)
+        // A very fast beat (180 ms): two beats per repeat.
+        assertEquals(360.0, DjBlends.echoDelayMs(180.0), 0.0)
+        assertEquals(DjBlends.DEFAULT_ECHO_MS, DjBlends.echoDelayMs(null), 0.0)
     }
 }

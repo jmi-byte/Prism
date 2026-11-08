@@ -357,8 +357,7 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
             else -> "Short blend"
         }}${when {
             !settings.sound.djEffects -> ""
-            settings.sound.djFilter -> " · Bass swap + filter"
-            else -> " · Bass swap"
+            else -> " · DJ: ${settings.sound.djStyle.label}"
         }}"
         next == null -> "Add another song for a transition"
         exactDecision != null -> "Analysis complete — no safe early cue for this pair"
@@ -494,15 +493,21 @@ private fun MixSettings(c: AppContainer) {
             SettingCard {
                 SwitchRow(
                     "DJ effects",
-                    "Bass swap: the next song comes in with its bass cut, then the two swap bass on a beat halfway through, so the low ends never pile up. Off: plain crossfades.",
+                    "Mix like a DJ: bass swaps, filter sweeps and echo outs, timed to the beat. Off: plain crossfades.",
                     settings.sound.djEffects,
                 ) { c.settings.setDjEffects(it) }
-                if (settings.sound.djEffects) SwitchRow(
-                    "Filter sweep",
-                    "The outgoing song's highs roll away as it leaves, while the next song opens up from muffled to full. Best with a crossfade of 6 s or more.",
-                    settings.sound.djFilter,
-                    Modifier.padding(top = 12.dp),
-                ) { c.settings.setDjFilter(it) }
+                if (settings.sound.djEffects) {
+                    Text("Style", color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.padding(top = 14.dp))
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFFE9F2FE)).padding(4.dp),
+                    ) {
+                        com.prism.music.data.prefs.DjStyle.entries.forEach { style ->
+                            SegmentButton(style.label, settings.sound.djStyle == style, Modifier.weight(1f)) { c.settings.setDjStyle(style) }
+                        }
+                    }
+                    Text(settings.sound.djStyle.detail, color = VelouraMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                    Text("DJ effects are easiest to hear with a crossfade of 6 s or more.", color = VelouraMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                }
             }
         }
         item {

@@ -78,10 +78,8 @@ class MixEngine(
     private val earlyLength: () -> Long? = { null },
     /** The main player's bass knob ([DjEqProcessor]); null where the build has no DJ effects. */
     private val mainBass: DjEqProcessor? = null,
-    /** DJ effects are on: blends swap the two songs' bass on a beat. */
-    private val bassSwap: () -> Boolean = { false },
-    /** DJ effects' filter sweep is on: the ending song's highs roll away as it leaves, the next one opens up. */
-    private val filterSweep: () -> Boolean = { false },
+    /** DJ effects' style ([DjBlends.resolve] picks each blend's); null when DJ effects are off. */
+    private val djStyle: () -> com.prism.music.data.prefs.DjStyle? = { null },
 ) {
     /** The main player at [speed], in the music's key. */
     private fun at(speed: Float) = PlaybackParameters(speed, pitch())
@@ -105,6 +103,10 @@ class MixEngine(
         val earlyInMs: Long? = null,
         /** Where in the blend (0..1, the ending song's time) the two songs' bass is swapped. */
         val swapAt: Float = 0.5f,
+        /** What this blend's DJ effects do. */
+        val dj: DjBlend = DjBlend.PLAIN,
+        /** The echo out's repeat time (one beat of the ending song when known). */
+        val echoDelayMs: Double = DjBlends.DEFAULT_ECHO_MS,
     ) {
         /** How many times the blend has been put off to get the tail in step. */
         var postponed = 0
@@ -127,6 +129,10 @@ class MixEngine(
     private var swapped = false
     /** This blend sweeps the two songs' filters. */
     private var sweeping = false
+    /** This blend echoes the ending song out: 0 not yet, 1 sending into the echo, 2 cut (only its echoes left). */
+    private var echoing = false
+    private var echoStage = 0
+    private var echoSentAt = 0f
     private var retryFor: String? = null
     private var retryCount = 0
     private var lastSyncLog = 0L
@@ -368,7 +374,9 @@ class MixEngine(
         }
         if (early == null && start < dur / 2) return noBlend(item, "the blend would start before the song's middle")
         val swapAt = bassSwapAt(len, if (beats && a != null) a.periodMs else null)
-        return Plan(item.mediaId, next.mediaId, toIndex, start, inMs, len, ratio, beats, beatMs, early, guardedIn, swapAt)
+        val dj = if (mainBass == null) DjBlend.PLAIN else DjBlends.resolve(djStyle(), beats, a?.steady == true)
+        val echoDelay = DjBlends.echoDelayMs(a?.takeIf { it.steady }?.periodMs)
+        return Plan(item.mediaId, next.mediaId, toIndex, start, inMs, len, ratio, beats, beatMs, early, guardedIn, swapAt, dj, echoDelay)
     }
 
     private fun knownDurationMs(item: MediaItem): Long? =
@@ -509,10 +517,15 @@ class MixEngine(
         t.volume = 1f
         main.volume = 0f
         // DJ effects: the next song comes in with its bass cut (set before the seek, so its first sound is already cut).
-        swapping = mainBass != null && tailBass != null && bassSwap()
+        val effects = mainBass != null && tailBass != null
+        swapping = effects && (p.dj == DjBlend.SMOOTH || p.dj == DjBlend.CLUB)
         swapped = false
         if (swapping) { mainBass?.setBass(0f); tailBass?.setBass(1f) }
-        sweeping = mainBass != null && tailBass != null && filterSweep()
+        echoing = effects && p.dj == DjBlend.ECHO
+        echoStage = 0
+        if (echoing) tailBass?.setEchoDelay(p.echoDelayMs)
+        if (p.dj != DjBlend.PLAIN) note("DJ effects: ${p.dj.name.lowercase()}")
+        sweeping = effects && p.dj == DjBlend.CLUB
         if (sweeping) sweepHz(0f, p.swapAt).let { (incoming, outgoing) -> mainBass?.setLowPass(incoming); tailBass?.setLowPass(outgoing) }
         main.seekTo(p.toIndex, p.inMs)
         main.playbackParameters = at(p.ratio)
@@ -580,6 +593,23 @@ class MixEngine(
         if (sweeping) sweepHz((progress + SWAP_LEAD_MS.toFloat() / p.lengthMs).coerceAtMost(1f), p.swapAt).let { (incoming, outgoing) ->
             mainBass?.setLowPass(incoming)
             tailBass?.setLowPass(outgoing)
+        }
+        if (echoing) {
+            val ahead = progress + SWAP_LEAD_MS.toFloat() / p.lengthMs
+            when (echoStage) {
+                0 -> if (ahead >= ECHO_AT) {
+                    // Into the echo for one repeat's worth, then the song itself is cut: only its echoes trail on.
+                    tailBass?.setEchoSend(1f)
+                    echoSentAt = ahead
+                    echoStage = 1
+                    note("echo out at %.2f (%.0f ms repeats)".format(progress, p.echoDelayMs))
+                }
+                1 -> if (ahead >= echoSentAt + (p.echoDelayMs / p.lengthMs).toFloat()) {
+                    tailBass?.setDry(0f)
+                    tailBass?.setEchoSend(0f)
+                    echoStage = 2
+                }
+            }
         }
         state.blend.value = BlendNow(p.fromId, p.toId, progress)
         if (p.beats && t.isPlaying) alignBeats(p, t, progress)
@@ -660,6 +690,8 @@ class MixEngine(
         swapping = false
         swapped = false
         sweeping = false
+        echoing = false
+        echoStage = 0
         mainBass?.setBass(1f)
         mainBass?.setLowPass(SweepFilter.OPEN_HZ)
     }
@@ -758,6 +790,8 @@ class MixEngine(
             return incoming to outgoing
         }
 
+        /** Where in the blend the ending song goes into the echo (early, so its repeats have time to trail off). */
+        const val ECHO_AT = 0.3f
         private const val SWEEP_IN_FROM_HZ = 2_500f
         private const val SWEEP_OUT_AFTER = 0.2f
         private const val SWEEP_OUT_TO_HZ = 300f

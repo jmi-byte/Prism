@@ -411,8 +411,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             earlyEstimated = ::intelligentAutoMixEstimated,
             earlyLength = { c.settings.current.let { s -> if (s.mixAuto) null else s.mixSeconds * 1000L } },
             mainBass = mainBass.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ },
-            bassSwap = { com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.sound.djEffects },
-            filterSweep = { com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.sound.let { it.djEffects && it.djFilter } },
+            djStyle = { c.settings.current.sound.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ && it.djEffects }?.djStyle },
         ).also { it.start() }
         // Prism Connect: the speaker or TV being cast to plays what this player plays, and its volume is the session's.
         sessionPlayer.remote = object : LyricsOverlayPlayer.Remote {
