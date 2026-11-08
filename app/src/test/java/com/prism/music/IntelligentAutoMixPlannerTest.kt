@@ -372,4 +372,16 @@ class IntelligentAutoMixPlannerTest {
         val t = tempo()
         assertEquals(6_000L, MixEngine.earlyBlendLengthMs(t, t, estimated = true))
     }
+
+    @Test
+    fun aChosenCrossfadeLengthReplacesTheAutomaticOne() {
+        // No tempo: exactly the chosen length, best guess or not.
+        assertEquals(8_000L, MixEngine.earlyBlendLengthMs(null, null, fixedMs = 8_000))
+        assertEquals(8_000L, MixEngine.earlyBlendLengthMs(null, null, estimated = true, fixedMs = 8_000))
+        // 120 BPM: bars are 2 s, so 9 s is rounded to the nearest whole bars (8 s or 10 s, both within a quarter).
+        val t = tempo()
+        assertTrue(MixEngine.earlyBlendLengthMs(t, t, fixedMs = 9_000) in listOf(8_000L, 10_000L))
+        // A 1 s fade is shorter than a bar: kept as chosen.
+        assertEquals(1_000L, MixEngine.earlyBlendLengthMs(t, t, fixedMs = 1_000))
+    }
 }

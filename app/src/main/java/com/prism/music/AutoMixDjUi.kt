@@ -56,7 +56,7 @@ private val VelouraColors = lightColorScheme(
     surfaceVariant = Color(0xFFEAF4FF), onSurface = VelouraNavy, onSurfaceVariant = VelouraMuted,
 )
 
-private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ, ACCOUNT }
+private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ, ACCOUNT, SETTINGS }
 private sealed interface DiscoveryFeed {
     data object Loading : DiscoveryFeed
     data class Ready(val songs: List<Song>) : DiscoveryFeed
@@ -92,11 +92,12 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
                 containerColor = Color.Transparent,
                 topBar = {
                     when (tab) {
-                        VelouraTab.HOME -> BrandHeader(linkMessage) { tab = VelouraTab.ACCOUNT }
+                        VelouraTab.HOME -> BrandHeader(linkMessage, onSettings = { tab = VelouraTab.SETTINGS }) { tab = VelouraTab.ACCOUNT }
                         VelouraTab.SEARCH -> PageHeader("Search YouTube Music")
                         VelouraTab.LIBRARY -> PageHeader("Your Music")
-                        VelouraTab.DJ -> PageHeader("Now Playing")
+                        VelouraTab.DJ -> PageHeader("Now Playing") { tab = VelouraTab.SETTINGS }
                         VelouraTab.ACCOUNT -> PageHeader("YouTube Music Account")
+                        VelouraTab.SETTINGS -> PageHeader("Mix Settings")
                     }
                 },
                 bottomBar = {
@@ -122,6 +123,7 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
                         VelouraTab.LIBRARY -> VelouraLibrary(c, onConnect = { showLogin = true }, onPlayed = { tab = VelouraTab.DJ })
                         VelouraTab.DJ -> NowPlaying(c) { tab = VelouraTab.SEARCH }
                         VelouraTab.ACCOUNT -> Account(c, onConnect = { showLogin = true }, onBack = { tab = VelouraTab.HOME })
+                        VelouraTab.SETTINGS -> MixSettings(c)
                     }
                 }
             }
@@ -157,7 +159,7 @@ private fun NavItem(
 }
 
 @Composable
-private fun BrandHeader(message: String?, onAccount: () -> Unit) {
+private fun BrandHeader(message: String?, onSettings: () -> Unit, onAccount: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().background(Color(0xFCFFFFFF)).statusBarsPadding()
             .padding(horizontal = 20.dp, vertical = 12.dp),
@@ -168,19 +170,21 @@ private fun BrandHeader(message: String?, onAccount: () -> Unit) {
             Text("Veloura", color = VelouraNavy, fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic, fontSize = 24.sp)
             Text(message ?: "Music that never stops moving", color = VelouraMuted, fontSize = 12.sp, maxLines = 1)
         }
+        IconButton(onClick = onSettings) { Icon(PrismIcons.Settings, "Mix settings", tint = VelouraNavy) }
         IconButton(onClick = onAccount) { Icon(PrismIcons.Person, "YouTube Music account", tint = VelouraNavy) }
     }
 }
 
 @Composable
-private fun PageHeader(title: String) {
+private fun PageHeader(title: String, onSettings: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth().background(Color(0xFCFFFFFF)).statusBarsPadding()
             .padding(horizontal = 20.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         BrandMark(30.dp)
-        Text(title, Modifier.padding(start = 12.dp), color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 20.sp)
+        Text(title, Modifier.padding(start = 12.dp).weight(1f), color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 20.sp)
+        onSettings?.let { IconButton(onClick = it) { Icon(PrismIcons.Settings, "Mix settings", tint = VelouraNavy) } }
     }
 }
 
@@ -347,7 +351,11 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
     val totalDuration = c.player.duration.coerceAtLeast(1)
     val autoStatus = when {
         !settings.intelligentAutoMix -> "Off — tap to turn on"
-        plan != null -> "Next mix in ~${clock((plan.transitionAtMs - position).coerceAtLeast(0))} · ${plan.boundary.label()} · ${if (plan.estimated) "Longer blend" else "Short blend"}"
+        plan != null -> "Next mix in ~${clock((plan.transitionAtMs - position).coerceAtLeast(0))} · ${plan.boundary.label()} · ${when {
+            !settings.mixAuto -> "${settings.mixSeconds} s blend"
+            plan.estimated -> "Longer blend"
+            else -> "Short blend"
+        }}"
         next == null -> "Add another song for a transition"
         exactDecision != null -> "Analysis complete — no safe early cue for this pair"
         else -> "Analysing the current and next song…"
@@ -457,6 +465,77 @@ private fun Search(c: AppContainer, onPlayed: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** How Veloura blends songs: Intelligent AutoMix on or off, and how long each crossfade lasts. */
+@Composable
+private fun MixSettings(c: AppContainer) {
+    val settings by c.settings.flow.collectAsState()
+    LazyColumn(contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            SettingCard {
+                SwitchRow(
+                    "Intelligent AutoMix",
+                    "Leave each song partway through and bring the next one in at a good moment. Off: songs play in full, one after another.",
+                    settings.intelligentAutoMix,
+                ) { on ->
+                    c.settings.setIntelligentAutoMix(on)
+                    // AutoMix runs its own blends; Prism's separate Crossfade and DJ mode would compete with it.
+                    if (on) { c.settings.setMix(false); c.dj.setOn(false) }
+                }
+            }
+        }
+        item {
+            SettingCard {
+                Text("Crossfade length", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                Text(
+                    "How long the two songs overlap at each transition.",
+                    color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp),
+                )
+                SwitchRow(
+                    "Automatic",
+                    "Veloura picks the length per pair: about 3 s at a clear phrase or beat, about 6 s at a best-guess point, whole bars when the beats line up.",
+                    settings.mixAuto,
+                    Modifier.padding(top = 10.dp),
+                ) { c.settings.setMixAuto(it) }
+                val seconds = settings.mixSeconds.coerceIn(1, CROSSFADE_SLIDER_MAX)
+                Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Fixed length", color = if (settings.mixAuto) VelouraMuted else VelouraNavy, modifier = Modifier.weight(1f))
+                    Text("$seconds s", color = if (settings.mixAuto) VelouraMuted else VelouraBlue, fontWeight = FontWeight.Black)
+                }
+                Slider(
+                    seconds.toFloat(), { c.settings.setMixSeconds(it.toInt()) },
+                    enabled = !settings.mixAuto,
+                    valueRange = 1f..CROSSFADE_SLIDER_MAX.toFloat(), steps = CROSSFADE_SLIDER_MAX - 2,
+                )
+                Text(
+                    if (settings.mixAuto) "Turn off Automatic to choose your own length."
+                    else "Used for every transition, rounded to whole bars when both songs have a clear beat. A blend never takes more than a third of either song.",
+                    color = VelouraMuted, fontSize = 12.sp,
+                )
+            }
+        }
+    }
+}
+
+private const val CROSSFADE_SLIDER_MAX = 12
+
+@Composable
+private fun SettingCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), content = content)
+    }
+}
+
+@Composable
+private fun SwitchRow(title: String, detail: String, checked: Boolean, modifier: Modifier = Modifier, onChange: (Boolean) -> Unit) {
+    Row(modifier.fillMaxWidth().clickable { onChange(!checked) }, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text(detail, color = VelouraMuted, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+        }
+        Switch(checked, onChange)
     }
 }
 

@@ -73,6 +73,8 @@ class MixEngine(
     private val earlyIn: (from: MediaItem, to: MediaItem) -> Long? = { _, _ -> null },
     /** The early point or cue is a best guess, so its blend is longer to cover the seam. */
     private val earlyEstimated: (from: MediaItem, to: MediaItem) -> Boolean = { _, _ -> false },
+    /** The listener's crossfade length for mid-song blends, in ms; null leaves it automatic. */
+    private val earlyLength: () -> Long? = { null },
 ) {
     /** The main player at [speed], in the music's key. */
     private fun at(speed: Float) = PlaybackParameters(speed, pitch())
@@ -310,7 +312,7 @@ class MixEngine(
         val nextDur = knownDurationMs(next) ?: Long.MAX_VALUE
         val rawEarly = earlyStart(item, next)
         val early = usableEarlyStart(rawEarly, main.currentPosition, dur)
-        val requestedLength = if (early != null) earlyBlendLengthMs(a, b, earlyEstimated(item, next)) else chosenLength(item, next, a, b, length)
+        val requestedLength = if (early != null) earlyBlendLengthMs(a, b, earlyEstimated(item, next), earlyLength()) else chosenLength(item, next, a, b, length)
         val len = minOf(requestedLength, dur / 3, nextDur / 3)
         if (len < 1000 || dur < 30_000) return noBlend(item, "a song too short to blend (${dur / 1000} s, next ${nextDur.takeIf { it != Long.MAX_VALUE }?.let { it / 1000 } ?: "?"} s)")
         val end = (a?.lastSoundMs?.takeIf { it in dur / 2..dur } ?: dur)
@@ -706,18 +708,19 @@ class MixEngine(
          * A mid-song transition overlaps two full-energy sections, so it never borrows the songs' ending/intro fade
          * lengths. With compatible steady tempo grids it lasts a whole number of four-beat bars nearest three seconds;
          * otherwise it is a short equal-power fade. A best-guess ([estimated]) point gets about six seconds instead, so a
-         * seam that may not sit on a phrase is covered by the overlap rather than heard as a cut.
+         * seam that may not sit on a phrase is covered by the overlap rather than heard as a cut. A length the listener
+         * chose ([fixedMs]) replaces both, still rounded to whole bars (within a quarter of it) when the beats line up.
          */
-        fun earlyBlendLengthMs(ending: Tempo?, next: Tempo?, estimated: Boolean = false): Long {
-            val plain = if (estimated) EARLY_GUESS_MS else EARLY_PLAIN_MS
-            val min = if (estimated) EARLY_GUESS_MIN_MS else EARLY_MIN_MS
-            val max = if (estimated) EARLY_GUESS_MAX_MS else EARLY_MAX_MS
+        fun earlyBlendLengthMs(ending: Tempo?, next: Tempo?, estimated: Boolean = false, fixedMs: Long? = null): Long {
+            val plain = fixedMs ?: if (estimated) EARLY_GUESS_MS else EARLY_PLAIN_MS
+            val min = fixedMs?.let { maxOf(1_000L, it * 3 / 4) } ?: if (estimated) EARLY_GUESS_MIN_MS else EARLY_MIN_MS
+            val max = fixedMs?.let { it * 4 / 3 } ?: if (estimated) EARLY_GUESS_MAX_MS else EARLY_MAX_MS
             if (ending == null || next == null || !ending.steady || !next.steady || ending.bpm <= 0 || next.bpm <= 0) {
                 return plain
             }
             val nextBpm = listOf(next.bpm, next.bpm * 2, next.bpm / 2).minBy { abs(ln(it / ending.bpm)) }
             if (abs(ending.bpm / nextBpm - 1) > MAX_STRETCH || next.firstBeatMs > 4000) return plain
-            return (1..8).map { bars -> Math.round(ending.periodMs * 4 * bars) }
+            return (1..32).map { bars -> Math.round(ending.periodMs * 4 * bars) }
                 .filter { it in min..max }
                 .minByOrNull { abs(it - plain) }
                 ?: plain

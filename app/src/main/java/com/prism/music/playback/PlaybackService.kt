@@ -387,7 +387,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             // DJ mode blends every song into the next, beat-matched, at Crossfade's automatic length.
             // Not while casting: the renderer plays one song at a time (and the phone's own player is muted).
             mixMs = { c.settings.current.let { s -> if ((s.mix || (com.prism.music.BuildConfig.AUTOMIX_DJ && s.intelligentAutoMix) || c.dj.onNow) && !c.cast.casting) s.mixSeconds * 1000L else null } },
-            auto = { c.settings.current.let { it.mixAuto || (com.prism.music.BuildConfig.AUTOMIX_DJ && it.intelligentAutoMix) } || c.dj.onNow },
+            // The listener's Automatic / fixed-seconds choice applies to AutoMix's end-of-song crossfades too.
+            auto = { c.settings.current.mixAuto || c.dj.onNow },
             beatMatch = { c.settings.current.mixBeatMatch || c.dj.onNow },
             harmonic = { from, to ->
                 if (!c.dj.onNow) null else {
@@ -406,6 +407,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             earlyStart = ::intelligentAutoMixStart,
             earlyIn = ::intelligentAutoMixEntry,
             earlyEstimated = ::intelligentAutoMixEstimated,
+            earlyLength = { c.settings.current.let { s -> if (s.mixAuto) null else s.mixSeconds * 1000L } },
         ).also { it.start() }
         // Prism Connect: the speaker or TV being cast to plays what this player plays, and its volume is the session's.
         sessionPlayer.remote = object : LyricsOverlayPlayer.Remote {
@@ -448,8 +450,10 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     private fun mayBlend(from: MediaItem, to: MediaItem): Boolean {
         val a = from.toSong() ?: return false
         val b = to.toSong() ?: return false
-        // With ordinary Crossfade and DJ mode off, only an exact current Intelligent AutoMix decision enables a blend.
-        if (!c.settings.current.mix && !c.dj.onNow && intelligentAutoMixStart(from, to) == null) return false
+        // With ordinary Crossfade and DJ mode off, Intelligent AutoMix still crossfades every pair: mid-song when it
+        // has a plan for this exact pair, otherwise at the end of the song (a short song, or analysis not ready).
+        val autoMixOn = com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.intelligentAutoMix
+        if (!c.settings.current.mix && !c.dj.onNow && !autoMixOn && intelligentAutoMixStart(from, to) == null) return false
         if (a.isLive || b.isLive || from.videoModeId != null || to.videoModeId != null) return false
         // Talk doesn't blend.
         if (a.isEpisode || b.isEpisode) return false
