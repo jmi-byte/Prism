@@ -502,36 +502,145 @@ private fun Account(c: AppContainer, onConnect: () -> Unit, onBack: () -> Unit) 
 private fun VelouraLibrary(c: AppContainer, onConnect: () -> Unit, onPlayed: () -> Unit) {
     val settings by c.settings.flow.collectAsState()
     val liked by c.library.likedShown.collectAsState()
+    val library by c.library.playlists.collectAsState()
+    val scope = rememberCoroutineScope()
+    var showLiked by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf<String?>(null) }
     if (!settings.isLoggedIn) {
         Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             ActionCard(
                 "Connect your YouTube Music library",
-                "Your liked songs and account library will appear here after you connect.",
+                "Your playlists, YouTube Music's mixes for you and your liked songs will appear here after you connect.",
                 "Connect YouTube Music",
                 onConnect,
             )
         }
         return
     }
-    if (liked.isEmpty()) {
-        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            ActionCard("Your liked songs are syncing", "This can take a moment after the first connection.", "Sync now") {
-                c.library.syncInBackground()
-            }
-        }
-        return
+    // The account's playlists are synced by the library; Home supplies the auto-generated mixes and suggestions.
+    LaunchedEffect(Unit) { c.library.refreshCollections() }
+    val home by produceState<List<com.prism.music.data.model.Shelf>?>(null) {
+        value = withContext(Dispatchers.IO) { runCatching { c.ytm.fullHome(pages = 3) }.getOrDefault(emptyList()) }
     }
+    val yours = VelouraPlaylists.accountPlaylists(library)
+    val offered = home?.let { VelouraPlaylists.suggestions(it, library) }
+
+    fun play(item: com.prism.music.data.model.PlaylistItem) {
+        if (busy != null) return
+        busy = item.id
+        message = "Loading ${item.title}…"
+        scope.launch {
+            val songs = runCatching { VelouraPlaylists.songs(c, item) }.getOrNull().orEmpty()
+                .filter { !it.isEpisode && !it.isLive }
+            busy = null
+            if (songs.isEmpty()) { message = "Couldn't load ${item.title}"; return@launch }
+            message = null
+            val kind = if (VelouraPlaylists.isMix(item)) QueueKind.RADIO else QueueKind.PLAYLIST
+            c.player.playQueue(songs, 0, QueueSource(kind, item.title, originId = VelouraPlaylists.normal(item.id)))
+            onPlayed()
+        }
+    }
+
+    fun save(item: com.prism.music.data.model.PlaylistItem) {
+        if (busy != null) return
+        busy = item.id
+        message = "Saving ${item.title} to your account…"
+        scope.launch {
+            message = when (val r = VelouraPlaylists.saveToAccount(c, item)) {
+                VelouraPlaylists.SaveResult.Followed -> "Saved ${item.title} to your YouTube Music library"
+                is VelouraPlaylists.SaveResult.Copied -> "Saved \"${r.title}\" (${r.songs} songs) to your YouTube Music playlists"
+                is VelouraPlaylists.SaveResult.Failed -> "Couldn't save ${item.title}: ${r.reason}"
+            }
+            busy = null
+        }
+    }
+
     LazyColumn(
         contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(9.dp),
     ) {
         item {
-            Text("Liked songs", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 25.sp)
-            Text("${liked.size} songs from YouTube Music", color = VelouraMuted, modifier = Modifier.padding(top = 3.dp, bottom = 8.dp))
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Color(0xFFE9F2FE)).padding(4.dp)) {
+                SegmentButton("Playlists", !showLiked, Modifier.weight(1f)) { showLiked = false }
+                SegmentButton("Liked songs", showLiked, Modifier.weight(1f)) { showLiked = true }
+            }
         }
-        itemsIndexed(liked, key = { _, song -> song.id }) { index, song ->
-            SongRow(song, clock(song.durationSec * 1000L)) {
-                c.player.playQueue(liked, index, QueueSource(QueueKind.LIBRARY, "Liked songs")); onPlayed()
+        message?.let { text ->
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF6FF)), shape = RoundedCornerShape(16.dp)) {
+                    Text(text, Modifier.fillMaxWidth().padding(12.dp), color = VelouraNavy, fontSize = 13.sp)
+                }
+            }
+        }
+        if (showLiked) {
+            if (liked.isEmpty()) item {
+                ActionCard("Your liked songs are syncing", "This can take a moment after the first connection.", "Sync now") {
+                    c.library.syncInBackground()
+                }
+            } else {
+                item {
+                    Text("Liked songs", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 25.sp)
+                    Text("${liked.size} songs from YouTube Music", color = VelouraMuted, modifier = Modifier.padding(top = 3.dp, bottom = 8.dp))
+                }
+                itemsIndexed(liked, key = { _, song -> song.id }) { index, song ->
+                    SongRow(song, clock(song.durationSec * 1000L)) {
+                        c.player.playQueue(liked, index, QueueSource(QueueKind.LIBRARY, "Liked songs")); onPlayed()
+                    }
+                }
+            }
+        } else {
+            item { SectionTitle("Your playlists", "Saved in your YouTube Music account") }
+            if (yours.isEmpty()) item {
+                Text("No playlists in your account yet. Save one below, or pull them in with Sync.", color = VelouraMuted, fontSize = 13.sp)
+                TextButton({ c.library.syncInBackground() }) { Text("Sync now") }
+            }
+            itemsIndexed(yours, key = { _, p -> "own:" + p.id }) { _, p ->
+                PlaylistRow(p, busy == p.id, action = null) { play(p) }
+            }
+            item { SectionTitle("Mixed for you", "YouTube Music's auto-generated mixes and suggested playlists") }
+            when {
+                offered == null -> item { Text("Loading your mixes…", color = VelouraMuted, fontSize = 13.sp) }
+                offered.isEmpty() -> item { Text("YouTube Music didn't offer any mixes right now.", color = VelouraMuted, fontSize = 13.sp) }
+                else -> itemsIndexed(offered, key = { _, p -> "offer:" + p.id }) { _, p ->
+                    PlaylistRow(p, busy == p.id, action = (if (VelouraPlaylists.isMix(p)) "Save copy" else "Save") to { save(p) }) { play(p) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionTitle(title: String, detail: String) {
+    Column(Modifier.padding(top = 8.dp)) {
+        Text(title, color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 21.sp)
+        Text(detail, color = VelouraMuted, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun PlaylistRow(
+    item: com.prism.music.data.model.PlaylistItem,
+    busy: Boolean,
+    action: Pair<String, () -> Unit>?,
+    onClick: () -> Unit,
+) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+        Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            AsyncImage(item.thumbnail, null, Modifier.size(62.dp).clip(RoundedCornerShape(14.dp)))
+            Column(Modifier.padding(horizontal = 12.dp).weight(1f)) {
+                Text(item.title, color = VelouraNavy, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    if (VelouraPlaylists.isMix(item)) "Mix · ${item.subtitle}" else item.subtitle,
+                    color = VelouraMuted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+            when {
+                busy -> CircularProgressIndicator(Modifier.size(22.dp), color = VelouraBlue, strokeWidth = 2.dp)
+                action != null -> OutlinedButton(action.second, contentPadding = PaddingValues(horizontal = 12.dp)) {
+                    Text(action.first, color = VelouraBlue, fontSize = 12.sp)
+                }
+                else -> Icon(PrismIcons.Play, "Play", tint = VelouraBlue)
             }
         }
     }
