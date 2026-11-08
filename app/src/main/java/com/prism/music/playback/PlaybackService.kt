@@ -91,7 +91,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     lateinit var player: ExoPlayer
         private set
     private lateinit var session: MediaLibrarySession
-    private val tree by lazy { MediaTree(c) }
+    private val tree by lazy { MediaTree(c) { if (::player.isInitialized) player.currentMediaItem?.toSong() else null } }
     lateinit var effects: AudioEffects
         private set
     /** Headphone correction (AutoEq): first, so the spatializer and the limiter work on the corrected sound. */
@@ -114,11 +114,14 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     private val repeatCommand = SessionCommand("prism.REPEAT", Bundle.EMPTY)
     private val lyricsCommand = SessionCommand("prism.CAR_LYRICS", Bundle.EMPTY)
     private val radioCommand = SessionCommand("prism.RADIO", Bundle.EMPTY)
+    // Veloura's buttons in the car and on the media controls.
+    private val autoMixCommand = SessionCommand("veloura.AUTOMIX", Bundle.EMPTY)
+    private val moreLikeCommand = SessionCommand("veloura.MORE_LIKE_THIS", Bundle.EMPTY)
     private val dislikeCommand = SessionCommand("prism.DISLIKE", Bundle.EMPTY)
     // 1.7.4: buttons the listener can put beside play (Settings → Player → Buttons → Notification and car).
     private val back10Command = SessionCommand("prism.BACK_10", Bundle.EMPTY)
     private val ahead30Command = SessionCommand("prism.AHEAD_30", Bundle.EMPTY)
-    private val customCommands get() = listOf(likeCommand, shuffleCommand, repeatCommand, lyricsCommand, radioCommand, dislikeCommand, back10Command, ahead30Command)
+    private val customCommands get() = listOf(likeCommand, shuffleCommand, repeatCommand, lyricsCommand, radioCommand, dislikeCommand, back10Command, ahead30Command, autoMixCommand, moreLikeCommand)
     /** What the media session (Android Auto, the notification) sees: the player, with lyrics laid over the title and cover. */
     private lateinit var sessionPlayer: LyricsOverlayPlayer
     private lateinit var carLyrics: CarLyrics
@@ -293,6 +296,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         scope.launch { c.settings.flow.map { it.audioDiagnostics }.distinctUntilChanged().collect { on -> AudioDiagnostics.setEnabled(on) { AudioDiagnostics.about(c) } } }
         // The buttons beside play follow Settings → Player → Buttons as soon as they're changed.
         scope.launch { c.settings.flow.map { it.sessionButtons }.distinctUntilChanged().drop(1).collect { updateButtons() } }
+        // Veloura's AutoMix button shows whether it's on.
+        if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch { c.settings.flow.map { it.intelligentAutoMix }.distinctUntilChanged().drop(1).collect { updateButtons() } }
         // The waveform progress bar picked: the playing song (and what's next) get their outlines now, not at the next song.
         scope.launch {
             c.settings.flow.map { it.scrubberStyle == com.prism.music.data.prefs.ScrubberStyle.WAVE }.distinctUntilChanged().drop(1).collect { on ->
@@ -1758,6 +1763,26 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     /** Autoplay's look for more songs, while it's out, and the queue it's for. */
     @Volatile private var autoplayJob: kotlinx.coroutines.Job? = null
     @Volatile private var keepGoingJob: kotlinx.coroutines.Job? = null
+    @Volatile private var moreLikeJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Veloura's "More like this" button (the car, the media controls): up to five songs like the one playing, same language
+     * group, ranked by sound, go in right after it (none already queued).
+     */
+    private fun addMoreLikeThis() {
+        if (moreLikeJob?.isActive == true) return
+        val seed = player.currentMediaItem?.toSong()?.takeIf { !it.isEpisode && !it.isLive } ?: return
+        moreLikeJob = scope.launch {
+            val queued = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet()
+            val found = runCatching { c.similarSongs.find(seed, queued, limit = 8, analyse = 6) }.getOrNull() ?: return@launch
+            if (player.currentMediaItem?.mediaId != seed.id) return@launch
+            val now = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }.toSet()
+            val add = found.picks.map { it.song }.filter { it.id !in now }.take(5)
+            if (add.isEmpty()) return@launch
+            AudioDiagnostics.log("automix", "more like this: ${add.size} after ${seed.id} (${found.seedLanguage.label})")
+            player.addMediaItems(player.currentMediaItemIndex + 1, add.map { it.toMediaItem() })
+        }
+    }
 
     /**
      * Veloura's "Keep the mix going": with two songs or fewer left, up to five songs like the last one are added from
@@ -2530,6 +2555,17 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
                 SessionButton.AHEAD_30 -> button(CommandButton.ICON_SKIP_FORWARD_30, tr(R.string.ahead_30_seconds), ahead30Command)
             }
         }
+        // Veloura: AutoMix on/off and "More like this" first, so a car shows them beside play.
+        val veloura = if (!com.prism.music.BuildConfig.AUTOMIX_DJ) emptyList() else {
+            val on = c.settings.current.intelligentAutoMix
+            listOf(
+                CommandButton.Builder(CommandButton.ICON_UNDEFINED)
+                    .setCustomIconResId(if (on) R.drawable.ic_car_automix_on else R.drawable.ic_car_automix_off)
+                    .setDisplayName(if (on) "AutoMix on (turn off)" else "AutoMix off (turn on)")
+                    .setSessionCommand(autoMixCommand).setSlots(CommandButton.SLOT_OVERFLOW).build(),
+                button(CommandButton.ICON_QUEUE_ADD, "More like this", moreLikeCommand),
+            )
+        }
         // Previous/next named for their slots outright: with only custom buttons, a controller that lays out by slots (the
         // Pixel Watch's media controls) filled the back/forward places with like and shuffle (1.6.1). But with them
         // Media3 takes the standard skip actions off the phone's media session, so widgets and "Dynamic Island" apps
@@ -2539,7 +2575,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
                 .setPlayerCommand(Player.COMMAND_SEEK_TO_PREVIOUS).setSlots(CommandButton.SLOT_BACK).build(),
             CommandButton.Builder(CommandButton.ICON_NEXT).setDisplayName(tr(R.string.widget_next))
                 .setPlayerCommand(Player.COMMAND_SEEK_TO_NEXT).setSlots(CommandButton.SLOT_FORWARD).build(),
-        ) else emptyList()) + custom
+        ) else emptyList()) + veloura + custom
         session.setMediaButtonPreferences(buttons)
         pushWidgets()
     }
@@ -2815,6 +2851,12 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
                 }
                 lyricsCommand.customAction -> c.settings.setCarLyrics(!c.settings.current.carLyrics)
                 radioCommand.customAction -> startRadio()
+                autoMixCommand.customAction -> {
+                    val on = !c.settings.current.intelligentAutoMix
+                    c.settings.setIntelligentAutoMix(on)
+                    if (on) { c.settings.setMix(false); c.dj.setOn(false) }
+                }
+                moreLikeCommand.customAction -> addMoreLikeThis()
                 dislikeCommand.customAction -> player.currentMediaItem?.toSong()?.let { song ->
                     c.library.setDisliked(song, true)
                     if (player.hasNextMediaItem()) player.seekToNextMediaItem()
@@ -2936,6 +2978,14 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
                 tree.shuffleSongs(single.mediaId)?.takeIf { it.second.size > 1 }?.let { (title, list) ->
                     c.queue.source.value = QueueSource(QueueKind.PLAYLIST, title)
                     c.queue.autoplayStart.value = -1
+                    // Veloura: "Play with AutoMix": the list in its order, every song mixed into the next.
+                    if (com.prism.music.BuildConfig.AUTOMIX_DJ) {
+                        c.settings.setIntelligentAutoMix(true)
+                        c.settings.setMix(false)
+                        c.dj.setOn(false)
+                        player.shuffleModeEnabled = false
+                        return@future MediaSession.MediaItemsWithStartPosition(list.map { it.toMediaItem() }, 0, C.TIME_UNSET)
+                    }
                     c.dj.setOn(false)
                     player.shuffleModeEnabled = false
                     val first = list.first().id

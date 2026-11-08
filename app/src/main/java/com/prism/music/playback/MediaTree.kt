@@ -34,7 +34,11 @@ import java.util.concurrent.ConcurrentHashMap
  * The browse tree Android Auto (and other media browsers) see:
  * Home · Liked songs · Library · Recently played, plus search.
  */
-class MediaTree(private val c: AppContainer) {
+class MediaTree(
+    private val c: AppContainer,
+    /** The song playing (Veloura's "More like" folder is of it). */
+    private val currentSong: () -> Song? = { null },
+) {
     companion object {
         const val ROOT = "root"
         const val HOME = "home"
@@ -51,6 +55,10 @@ class MediaTree(private val c: AppContainer) {
         const val PRISM_LIST = "pp:"
         /** A holiday mix's folder ("hm:" + its "season:…" id). */
         const val HOLIDAY = "hm:"
+        /** Veloura: its mixes, as the car's second tab (More like the song playing, Made for you, Home's playlists). */
+        const val VELOURA = "veloura"
+        /** Veloura: songs like the one playing ([com.prism.music.SimilarSongs]). */
+        const val SIMILAR = "vsim"
         /** How many of each Home section's items show as tiles in the car. */
         private const val HOME_TILES = 8
         /** The songs a search found, as a folder (a song tapped in the results plays them on from there). */
@@ -123,6 +131,28 @@ class MediaTree(private val c: AppContainer) {
 
     suspend fun children(parentId: String): List<MediaItem> = when {
         // Four tabs, as cars show a root's first four folders along the top (Liked songs and Downloads open Library).
+        // Veloura: its mixes take the second tab (Made for you moves inside them), so a car's four tabs stay four.
+        parentId == ROOT && com.prism.music.BuildConfig.AUTOMIX_DJ -> listOf(
+            folder(HOME, tr(R.string.home), extras = styled(browsableGrid = true, playableGrid = true)),
+            folder(VELOURA, "Veloura Mixes", type = MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS, extras = styled(browsableGrid = true, playableGrid = false)),
+            folder(RECENT, tr(R.string.recents), type = MediaMetadata.MEDIA_TYPE_PLAYLIST),
+            folder(LIBRARY, tr(R.string.library), type = MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS, extras = styled(browsableGrid = true, playableGrid = false)),
+        )
+        parentId == VELOURA -> {
+            if (homeShelves.isEmpty()) homeShelves = runCatching { c.ytm.fullHome(2) }.getOrDefault(homeShelves)
+            val playing = currentSong()
+            listOfNotNull(
+                playing?.let { folder(SIMILAR, "More like ${it.title}", "Same language, similar sound", it.thumbnail, MediaMetadata.MEDIA_TYPE_PLAYLIST) },
+                folder(MADE_FOR_YOU, tr(R.string.made_for_you), type = MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS, extras = styled(browsableGrid = true, playableGrid = false)),
+            ) + homeShelves.flatMap { it.items }.filterIsInstance<PlaylistItem>().distinctBy { it.id.removePrefix("VL") }
+                .filter { it.id.removePrefix("VL") != "LM" }.take(16)
+                .map { folder(mixOrPlaylistId(it), it.title, it.subtitle, c.covers.art(it), MediaMetadata.MEDIA_TYPE_PLAYLIST) }
+        }
+        // Found as it's opened (a few seconds: YouTube Music's suggestions, kept to the language group, a quick sound scan).
+        parentId == SIMILAR -> currentSong()?.let { seed ->
+            val found = runCatching { c.similarSongs.find(seed, setOf(seed.id), limit = 15, analyse = 4) }.getOrNull()
+            found?.picks?.takeIf { it.isNotEmpty() }?.let { picks -> songList(SIMILAR, "More like ${seed.title}", picks.map { it.song }) }
+        } ?: emptyList()
         parentId == ROOT -> listOf(
             folder(HOME, tr(R.string.home), extras = styled(browsableGrid = true, playableGrid = true)),
             folder(MADE_FOR_YOU, tr(R.string.made_for_you), type = MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS, extras = styled(browsableGrid = true, playableGrid = false)),
@@ -216,7 +246,9 @@ class MediaTree(private val c: AppContainer) {
         // "Shuffle play" and "Play as a DJ set" rows first, as in the phone app (the car has no buttons of its own for them).
         val top = if (list.size > 1) listOf(
             startItem(SHUFFLE, id, tr(R.string.shuffle_play), com.prism.music.data.model.songCount(list.size), "ic_auto_shuffle"),
-            startItem(DJ, id, tr(R.string.play_as_a_dj_set), tr(R.string.in_the_order_that_blends_best), "ic_auto_dj"),
+            // Veloura: AutoMix, not Prism's DJ mode (the two would compete).
+            if (com.prism.music.BuildConfig.AUTOMIX_DJ) startItem(DJ, id, "Play with AutoMix", "Every song mixed into the next", "ic_auto_dj")
+            else startItem(DJ, id, tr(R.string.play_as_a_dj_set), tr(R.string.in_the_order_that_blends_best), "ic_auto_dj"),
         ) else emptyList()
         return top + list.map(::playable)
     }
