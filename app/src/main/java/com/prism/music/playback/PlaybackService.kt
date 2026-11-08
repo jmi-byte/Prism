@@ -417,6 +417,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             earlyLength = { c.settings.current.let { s -> if (s.mixAuto) null else s.mixSeconds * 1000L } },
             mainBass = mainBass.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ },
             djStyle = { c.settings.current.sound.takeIf { com.prism.music.BuildConfig.AUTOMIX_DJ && it.djEffects }?.djStyle },
+            skipNow = { if (!jumpToNextCue()) player.seekToNextMediaItem() },
         ).also { it.start() }
         // Prism Connect: the speaker or TV being cast to plays what this player plays, and its volume is the session's.
         sessionPlayer.remote = object : LyricsOverlayPlayer.Remote {
@@ -491,21 +492,48 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     private fun intelligentAutoMixEntry(from: MediaItem, to: MediaItem): Long? {
         val a = from.toSong() ?: return null
         val b = to.toSong() ?: return null
-        return IntelligentAutoMixActivation.entryAt(
-            enabled = com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.intelligentAutoMix,
-            decision = c.intelligentAutoMixShadow.decision.value,
-            fromSongId = a.id,
-            toSongId = b.id,
-        )
+        val enabled = com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.intelligentAutoMix
+        val decision = c.intelligentAutoMixShadow.decision.value
+        // The pair's own plan decides, even when it says "from the opening" (a short next song).
+        if (decision?.songId == a.id && decision.nextSongId == b.id) {
+            return IntelligentAutoMixActivation.entryAt(enabled, decision, a.id, b.id)
+        }
+        // No plan for this pair yet (Next pressed before its analysis finished): a quick best guess from what the
+        // queue's pre-analysis has, so the next song still comes in partway rather than from 0:00.
+        return if (enabled) quickEntry(b) else null
+    }
+
+    /** A best-guess cue into [song] from what's already known of it (its highlight, its beat); null for a short song. */
+    private fun quickEntry(song: com.prism.music.data.model.Song): Long? =
+        IntelligentAutoMixPlanner.estimatedEntry(
+            song.durationSec * 1000L, autoMixPrepared[song.id]?.bestPartStartMs, emptyList(), c.mixTempo.cached(song.id),
+        ).takeIf { it > 0 }
+
+    /**
+     * Moves to the next song now, without a blend, at its cue (AutoMix's, a best guess included); false when it has
+     * none (a short song), and the caller then moves on as an ordinary Next.
+     */
+    private fun jumpToNextCue(): Boolean {
+        val from = player.currentMediaItem ?: return false
+        val toIndex = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET && it != player.currentMediaItemIndex } ?: return false
+        val to = player.getMediaItemAt(toIndex)
+        val entry = intelligentAutoMixEntry(from, to) ?: return false
+        AudioDiagnostics.log("automix", "Next ${from.mediaId} -> ${to.mediaId} at ${entry / 1000} s")
+        player.seekTo(toIndex, entry)
+        if (player.playbackState == Player.STATE_IDLE) player.prepare()
+        return true
     }
 
     /** Whether the matching decision for this exact pair is a best guess (it then gets the longer blend). */
     private fun intelligentAutoMixEstimated(from: MediaItem, to: MediaItem): Boolean {
         val a = from.toSong() ?: return false
         val b = to.toSong() ?: return false
+        val decision = c.intelligentAutoMixShadow.decision.value
+        // Without a plan for this pair, a Next blend's cue is the quick best guess.
+        if (decision?.songId != a.id || decision.nextSongId != b.id) return true
         return IntelligentAutoMixActivation.estimated(
             enabled = com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.intelligentAutoMix,
-            decision = c.intelligentAutoMixShadow.decision.value,
+            decision = decision,
             fromSongId = a.id,
             toSongId = b.id,
         )
@@ -514,8 +542,9 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     /**
      * Next while Intelligent AutoMix is on is mixed like an automatic transition: [MixEngine.blendSoon] starts the same
      * blend (length, incoming cue, beat matching, DJ effects) a few seconds later. When it can't (paused, a second Next
-     * while one is pending, a pair that isn't blended), Next moves on at once: into the analysed incoming cue when it
-     * rests on a phrase or a beat, otherwise as an ordinary Next.
+     * while one is pending, a blend already under way), or the blend falls through, Next moves on at once to the next
+     * song's cue ([jumpToNextCue]: AutoMix's, or a quick best guess before its analysis is done); a short next song
+     * starts from its opening, as an ordinary Next.
      */
     internal fun nextWithIntelligentAutoMix(): Boolean {
         if (!com.prism.music.BuildConfig.AUTOMIX_DJ || !c.settings.current.intelligentAutoMix) return false
@@ -527,16 +556,10 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             AudioDiagnostics.log("automix", "Next ${from.mediaId} -> ${to.mediaId}: mixed")
             return true
         }
-        val a = from.toSong() ?: return false
-        val b = to.toSong() ?: return false
-        val entry = IntelligentAutoMixActivation.nextCueAt(
-            enabled = true, decision = c.intelligentAutoMixShadow.decision.value, fromSongId = a.id, toSongId = b.id,
-        ) ?: return false
+        // No blend now (a second Next, paused, a blend under way): straight to the next song's cue, as the listener
+        // asked for mid-song starts; a short next song (no cue) starts as an ordinary Next.
         if (::mix.isInitialized) mix.stopBlend()
-        AudioDiagnostics.log("automix", "Next ${from.mediaId} -> ${to.mediaId} at ${entry / 1000} s")
-        player.seekTo(toIndex, entry)
-        if (player.playbackState == Player.STATE_IDLE) player.prepare()
-        return true
+        return jumpToNextCue()
     }
 
     /**

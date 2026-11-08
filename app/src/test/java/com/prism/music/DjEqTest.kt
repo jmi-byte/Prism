@@ -113,12 +113,12 @@ class DjEqTest {
     fun theSweepOpensTheIncomingSongByTheSwapAndClosesTheOutgoingOneAtTheEnd() {
         val open = SweepFilter.OPEN_HZ
         val (in0, out0) = MixEngine.sweepHz(0f, 0.5f)
-        assertEquals(2_500f, in0, 1f)
+        assertEquals(1_200f, in0, 1f)
         assertEquals(open, out0, 0f)
         val (inMid, _) = MixEngine.sweepHz(0.5f, 0.5f)
         assertEquals(open, inMid, 0f)
         val (_, outEnd) = MixEngine.sweepHz(1f, 0.5f)
-        assertEquals(300f, outEnd, 1f)
+        assertEquals(250f, outEnd, 1f)
         // Both move one way only.
         val steps = (0..20).map { MixEngine.sweepHz(it / 20f, 0.5f) }
         assertTrue(steps.zipWithNext().all { (a, b) -> b.first >= a.first && b.second <= a.second })
@@ -174,11 +174,12 @@ class DjEqTest {
     }
 
     @Test
-    fun autoPicksClubForMatchedBeatsEchoForUnmatchedAndSmoothWithoutABeat() {
+    fun autoPicksClubForMatchedBeatsEchoForUnmatchedAndClubWithoutABeat() {
         assertEquals(DjBlend.PLAIN, DjBlends.resolve(null, beatsMatched = true, endingBeatKnown = true))
         assertEquals(DjBlend.CLUB, DjBlends.resolve(DjStyle.AUTO, beatsMatched = true, endingBeatKnown = true))
         assertEquals(DjBlend.ECHO, DjBlends.resolve(DjStyle.AUTO, beatsMatched = false, endingBeatKnown = true))
-        assertEquals(DjBlend.SMOOTH, DjBlends.resolve(DjStyle.AUTO, beatsMatched = false, endingBeatKnown = false))
+        // No beat at all: still a filter sweep (a bass swap alone is lost on a phone's speaker).
+        assertEquals(DjBlend.CLUB, DjBlends.resolve(DjStyle.AUTO, beatsMatched = false, endingBeatKnown = false))
         // A chosen style is used as it is.
         assertEquals(DjBlend.ECHO, DjBlends.resolve(DjStyle.ECHO, beatsMatched = true, endingBeatKnown = true))
         assertEquals(DjBlend.SMOOTH, DjBlends.resolve(DjStyle.SMOOTH, beatsMatched = true, endingBeatKnown = true))
@@ -192,5 +193,20 @@ class DjEqTest {
         assertEquals(DjBlends.DEFAULT_ECHO_MS, DjBlends.echoDelayMs(null), 0.0)
         // A very slow beat (55 BPM, ~1091 ms): half a beat per repeat, still on the beat.
         assertEquals(1_091.0 / 2, DjBlends.echoDelayMs(1_091.0), 0.0)
+    }
+
+    @Test
+    fun aDjBlendKeepsBothSongsUpThroughTheMiddle() {
+        val (in0, out0) = MixEngine.djGains(0f)
+        assertEquals(0f, in0, 1e-4f); assertEquals(1f, out0, 1e-4f)
+        // The ending song holds for the first quarter; the next one is fully up by three-quarters.
+        assertEquals(1f, MixEngine.djGains(0.25f).second, 1e-4f)
+        assertEquals(1f, MixEngine.djGains(0.75f).first, 1e-4f)
+        val (inMid, outMid) = MixEngine.djGains(0.5f)
+        assertTrue(inMid > 0.8f && outMid > 0.8f)
+        // Never much louder than one song: at most about +1.8 dB of power together.
+        assertTrue((0..20).all { val (a, b) = MixEngine.djGains(it / 20f); a * a + b * b <= 1.52f })
+        val (in1, out1) = MixEngine.djGains(1f)
+        assertEquals(1f, in1, 1e-4f); assertEquals(0f, out1, 1e-4f)
     }
 }

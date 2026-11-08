@@ -259,7 +259,12 @@ private fun autoMixStatus(c: AppContainer, songId: String?, nextId: String?, pos
     return when {
         !settings.intelligentAutoMix -> "Off · switch on to mix every song into the next"
         // A blend under way, or about to start (an automatic one, or Next pressed): what's really happening now.
-        blendNow != null -> "Mixing into the next song…"
+        blendNow != null -> "Mixing into the next song…" + when (blendNow!!.dj) {
+            com.prism.music.playback.DjBlend.PLAIN -> ""
+            com.prism.music.playback.DjBlend.SMOOTH -> " · DJ: bass swap"
+            com.prism.music.playback.DjBlend.CLUB -> " · DJ: bass swap + filter sweep"
+            com.prism.music.playback.DjBlend.ECHO -> " · DJ: echo out"
+        }
         blendMark?.takeIf { it.songId == songId && it.startMs - position in 0..MIX_SOON_MS } != null ->
             "Mixing into the next song in ${((blendMark!!.startMs - position) / 1000) + 1} s"
         plan != null -> buildString {

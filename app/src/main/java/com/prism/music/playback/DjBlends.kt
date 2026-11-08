@@ -15,10 +15,11 @@ object DjBlends {
         DjStyle.SMOOTH -> DjBlend.SMOOTH
         DjStyle.CLUB -> DjBlend.CLUB
         DjStyle.ECHO -> DjBlend.ECHO
+        // A filter sweep needs no beat, so without one Auto still sweeps (a bass swap alone is lost on a phone's speaker).
         DjStyle.AUTO -> when {
             beatsMatched -> DjBlend.CLUB
             endingBeatKnown -> DjBlend.ECHO
-            else -> DjBlend.SMOOTH
+            else -> DjBlend.CLUB
         }
     }
 

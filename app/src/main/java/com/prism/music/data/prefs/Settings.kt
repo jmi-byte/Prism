@@ -737,11 +737,11 @@ const val MAX_CROSSFADE_SECONDS = 30
  * - [SMOOTH]: bass swap only (the next song comes in without its bass; the two swap on a beat).
  * - [CLUB]: bass swap plus a filter sweep (the ending song's highs roll away, the next one opens up).
  * - [ECHO]: the ending song is sent into a beat-timed echo and cut, so it trails away in repeats.
- * - [AUTO]: per pair: Club when the two beats are matched, Echo out when they can't be but the ending song's beat is
- *   known, Smooth otherwise ([com.prism.music.playback.DjBlends.resolve]).
+ * - [AUTO]: per pair: Echo out when the ending song's beat is known but the two can't be matched, Club otherwise
+ *   ([com.prism.music.playback.DjBlends.resolve]).
  */
 enum class DjStyle(val label: String, val detail: String) {
-    AUTO("Auto", "Picks per pair: Club when the beats line up, Echo out when they don't, Smooth when the beat isn't known."),
+    AUTO("Auto", "Picks per pair: Echo out when the two beats can't be lined up, Club (bass swap and filter sweep) otherwise."),
     SMOOTH("Smooth", "Bass swap only: the next song comes in without its bass, then the two swap on a beat."),
     CLUB("Club", "Bass swap plus a filter sweep: the outgoing song's highs roll away as the next one opens up."),
     ECHO("Echo out", "The outgoing song is thrown into a beat-timed echo and cut, trailing off as the next song comes in."),

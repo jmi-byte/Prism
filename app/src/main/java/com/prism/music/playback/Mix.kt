@@ -79,6 +79,8 @@ class MixEngine(
     private val mainBass: DjEqProcessor? = null,
     /** DJ effects' style ([DjBlends.resolve] picks each blend's); null when DJ effects are off. */
     private val djStyle: () -> com.prism.music.data.prefs.DjStyle? = { null },
+    /** Moves on to the next song now, without a blend (a Next blend that couldn't be made): at its cue when it has one. */
+    private val skipNow: () -> Unit = { main.seekToNextMediaItem() },
 ) {
     /** The main player at [speed], in the music's key. */
     private fun at(speed: Float) = PlaybackParameters(speed, pitch())
@@ -224,7 +226,7 @@ class MixEngine(
         val f = forced ?: return
         forced = null
         note("Next blend not possible ($why): moving on")
-        if (main.currentMediaItem?.mediaId == f.first && main.hasNextMediaItem()) main.seekToNextMediaItem()
+        if (main.currentMediaItem?.mediaId == f.first && main.hasNextMediaItem()) skipNow()
     }
 
     /** A blend is under way (the next song's tempo is the blend's until it settles): the Speed button waits for it. */
@@ -405,7 +407,13 @@ class MixEngine(
         val rawEarly = earlyStart(item, next)
         // A Next blend starts where the listener asked; otherwise AutoMix's own early point, while there's time for it.
         val early = forcedFor(item)?.takeIf { it < dur } ?: usableEarlyStart(rawEarly, main.currentPosition, dur)
-        val requestedLength = if (early != null) earlyBlendLengthMs(a, b, earlyEstimated(item, next), earlyLength()) else chosenLength(item, next, a, b, length)
+        // DJ effects need room to be heard: on Automatic, a mid-song DJ blend lasts about 8 s (whole bars on the beat).
+        val djWanted = mainBass != null && djStyle() != null
+        val requestedLength = when {
+            early == null -> chosenLength(item, next, a, b, length)
+            djWanted && earlyLength() == null -> earlyBlendLengthMs(a, b, fixedMs = DJ_BLEND_MS)
+            else -> earlyBlendLengthMs(a, b, earlyEstimated(item, next), earlyLength())
+        }
         val len = minOf(requestedLength, dur / 3, nextDur / 3)
         if (len < 1000 || dur < 30_000) return noBlend(item, "a song too short to blend (${dur / 1000} s, next ${nextDur.takeIf { it != Long.MAX_VALUE }?.let { it / 1000 } ?: "?"} s)")
         val end = (a?.lastSoundMs?.takeIf { it in dur / 2..dur } ?: dur)
@@ -650,7 +658,9 @@ class MixEngine(
                 progress, tailPosition(t), stateName(t), shifter?.quietMs ?: 0L, main.currentPosition, stateName(main),
             ))
         }
-        val (incoming, outgoing) = curve().gains(progress)
+        // A DJ blend keeps both songs up through the middle, the way a DJ mixes: the bass swap and the filters separate
+        // them, rather than one fading out before its effect can be heard.
+        val (incoming, outgoing) = if (p.dj != DjBlend.PLAIN) djGains(progress) else curve().gains(progress)
         main.volume = incoming
         t.volume = outgoing
         // The bass swap, a little early: the knobs act on audio still to reach the speaker by about the output's delay.
@@ -681,7 +691,7 @@ class MixEngine(
                 }
             }
         }
-        state.blend.value = BlendNow(p.fromId, p.toId, progress)
+        state.blend.value = BlendNow(p.fromId, p.toId, progress, p.dj)
         if (p.beats && t.isPlaying) alignBeats(p, t, progress)
         if (progress >= 1f || ended) {
             t.release()
@@ -864,9 +874,24 @@ class MixEngine(
 
         /** Where in the blend the ending song goes into the echo (early, so its repeats have time to trail off). */
         const val ECHO_AT = 0.3f
-        private const val SWEEP_IN_FROM_HZ = 2_500f
-        private const val SWEEP_OUT_AFTER = 0.2f
-        private const val SWEEP_OUT_TO_HZ = 300f
+        private const val SWEEP_IN_FROM_HZ = 1_200f
+        private const val SWEEP_OUT_AFTER = 0.15f
+        private const val SWEEP_OUT_TO_HZ = 250f
+
+        /** A mid-song DJ blend's length on Automatic (rounded to whole bars when the beats line up). */
+        const val DJ_BLEND_MS = 8_000L
+
+        /**
+         * The two volumes (incoming, outgoing) through a DJ blend: the next song is fully up by three-quarters of the way,
+         * the ending one holds until a quarter of the way, both equal-power, so in the middle both are loud (about
+         * +1.8 dB together) and the effects, not the faders, do the mixing.
+         */
+        fun djGains(progress: Float): Pair<Float, Float> {
+            val p = progress.coerceIn(0f, 1f)
+            val incoming = sin(minOf(p / 0.75f, 1f) * PI / 2).toFloat()
+            val outgoing = cos(maxOf((p - 0.25f) / 0.75f, 0f) * PI / 2).toFloat()
+            return incoming to outgoing
+        }
 
         /** About how far ahead of the speaker the audio chain works: the swap is turned this much early. */
         private const val SWAP_LEAD_MS = 120L
@@ -1047,7 +1072,7 @@ data class BlendMark(val songId: String, val startMs: Long, val lengthMs: Long =
 data class BlendIn(val songId: String, val inMs: Long, val lengthMs: Long)
 
 /** A crossfade under way: [fromId] fading out into [toId], [progress] (0 … 1) of the way (A6's blended covers). */
-data class BlendNow(val fromId: String, val toId: String, val progress: Float)
+data class BlendNow(val fromId: String, val toId: String, val progress: Float, val dj: DjBlend = DjBlend.PLAIN)
 
 /** What [MixEngine] tells the player about crossfades (one per app, [com.prism.music.AppContainer.mixState]). */
 class MixState {
