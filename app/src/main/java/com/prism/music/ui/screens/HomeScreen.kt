@@ -634,9 +634,9 @@ private fun HomeTopRow(greeting: String, today: String, showGreeting: Boolean) {
             if (com.prism.music.BuildConfig.AUTOMIX_DJ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        androidx.compose.ui.res.painterResource(R.drawable.ic_veloura_crossfade_v),
+                        androidx.compose.ui.res.painterResource(R.drawable.ic_veloura_logo),
                         "Veloura",
-                        Modifier.size(44.dp).clip(RoundedCornerShape(13.dp)),
+                        Modifier.size(44.dp),
                         tint = Color.Unspecified,
                     )
                     Column(Modifier.padding(start = 11.dp)) {

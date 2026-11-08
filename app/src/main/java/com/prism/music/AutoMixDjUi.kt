@@ -41,91 +41,101 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.sin
 
-private val VelouraBlue = Color(0xFF087DFF)
-private val VelouraCyan = Color(0xFF12CFE4)
-private val VelouraOrange = Color(0xFFFF8A34)
-private val VelouraNavy = Color(0xFF071E41)
-private val VelouraBackground = Color(0xFFF4F9FF)
-private val VelouraMuted = Color(0xFF63758B)
 
-private val VelouraColors = lightColorScheme(
-    primary = VelouraBlue, onPrimary = Color.White,
-    primaryContainer = Color(0xFFDCEEFF), onPrimaryContainer = VelouraNavy,
-    secondary = VelouraCyan, tertiary = VelouraOrange,
-    background = VelouraBackground, surface = Color.White,
-    surfaceVariant = Color(0xFFEAF4FF), onSurface = VelouraNavy, onSurfaceVariant = VelouraMuted,
-)
+private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ, QUEUE, ACCOUNT, SETTINGS }
 
-private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ, ACCOUNT, SETTINGS }
-private sealed interface DiscoveryFeed {
-    data object Loading : DiscoveryFeed
-    data class Ready(val songs: List<Song>) : DiscoveryFeed
-    data class Error(val message: String) : DiscoveryFeed
-}
-
-/** Veloura's UI. Prism's playback and YouTube Music engines remain underneath. */
+/** Veloura's UI (laid out in VelouraScreens.kt). Prism's playback and YouTube Music engines remain underneath. */
 @Composable
 fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
     var tab by remember { mutableStateOf(VelouraTab.HOME) }
+    // Where Now Playing's ⌄ goes back to.
+    var lastTab by remember { mutableStateOf(VelouraTab.HOME) }
     var showLogin by remember { mutableStateOf(false) }
-    // Kept while the app is open, so switching tabs doesn't download Home's mixes and the library again.
+    // Kept while the app is open, so switching tabs doesn't download Home's playlists and the library again.
     val libraryCache = remember { LibraryCache() }
     val link by deepLink.collectAsState()
-    var linkMessage by remember { mutableStateOf<String?>(null) }
+    var message by remember { mutableStateOf<String?>(null) }
+    fun go(t: VelouraTab) {
+        if (t != VelouraTab.DJ && t != VelouraTab.QUEUE) lastTab = t
+        tab = t
+    }
 
     LaunchedEffect(link) {
         val uri = link ?: return@LaunchedEffect
-        linkMessage = "Opening YouTube Music link…"
+        message = "Opening YouTube Music link…"
         val error = playYouTubeLink(c, uri)
-        linkMessage = error
-        if (error == null) tab = VelouraTab.DJ
+        message = error
+        if (error == null) go(VelouraTab.DJ)
+    }
+    // A full-screen page goes back with the system Back, as the design's ⌄ and ← do.
+    androidx.activity.compose.BackHandler(enabled = tab != VelouraTab.HOME && !showLogin) {
+        go(when (tab) { VelouraTab.QUEUE -> VelouraTab.DJ; VelouraTab.DJ -> lastTab; else -> VelouraTab.HOME })
     }
 
     MaterialTheme(colorScheme = VelouraColors) {
         if (showLogin) {
             com.prism.music.ui.screens.LoginScreen(
-                onDone = { showLogin = false; tab = VelouraTab.HOME },
+                onDone = { showLogin = false; go(VelouraTab.HOME) },
                 onBack = { showLogin = false },
             )
             return@MaterialTheme
         }
-        Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
-            Scaffold(
-                containerColor = Color.Transparent,
-                topBar = {
-                    when (tab) {
-                        VelouraTab.HOME -> BrandHeader(linkMessage, onSettings = { tab = VelouraTab.SETTINGS }) { tab = VelouraTab.ACCOUNT }
-                        VelouraTab.SEARCH -> PageHeader("Search YouTube Music")
-                        VelouraTab.LIBRARY -> PageHeader("Your Music")
-                        VelouraTab.DJ -> PageHeader("Now Playing") { tab = VelouraTab.SETTINGS }
-                        VelouraTab.ACCOUNT -> PageHeader("YouTube Music Account")
-                        VelouraTab.SETTINGS -> PageHeader("Mix Settings")
-                    }
-                },
-                bottomBar = {
-                    Row(
-                        Modifier.fillMaxWidth().background(Color.White).navigationBarsPadding()
-                            .padding(horizontal = 8.dp, vertical = 7.dp),
-                    ) {
-                        NavItem(tab == VelouraTab.HOME, "Home", PrismIcons.Home, Modifier.weight(1f)) { tab = VelouraTab.HOME }
-                        NavItem(tab == VelouraTab.SEARCH, "Search", PrismIcons.Search, Modifier.weight(1f)) { tab = VelouraTab.SEARCH }
-                        NavItem(tab == VelouraTab.LIBRARY, "Library", PrismIcons.Library, Modifier.weight(1f)) { tab = VelouraTab.LIBRARY }
-                        NavItem(tab == VelouraTab.DJ, "DJ", PrismIcons.Turntable, Modifier.weight(1f)) { tab = VelouraTab.DJ }
-                    }
-                },
-            ) { padding ->
-                Box(
-                    Modifier.fillMaxSize().padding(padding).background(
-                        Brush.verticalGradient(listOf(Color(0xFFEAF6FF), Color.White, VelouraBackground)),
-                    ),
-                ) {
-                    when (tab) {
-                        VelouraTab.HOME -> Discover(c, { tab = VelouraTab.SEARCH }, { tab = VelouraTab.DJ })
-                        VelouraTab.SEARCH -> Search(c) { tab = VelouraTab.DJ }
-                        VelouraTab.LIBRARY -> VelouraLibrary(c, libraryCache, onConnect = { showLogin = true }, onPlayed = { tab = VelouraTab.DJ })
-                        VelouraTab.DJ -> NowPlaying(c) { tab = VelouraTab.SEARCH }
-                        VelouraTab.ACCOUNT -> Account(c, onConnect = { showLogin = true }, onBack = { tab = VelouraTab.HOME })
-                        VelouraTab.SETTINGS -> MixSettings(c)
+        val mixMenu = listOf("Mix settings" to { go(VelouraTab.SETTINGS) })
+        when (tab) {
+            // The player and its plan fill the screen, as in the design.
+            VelouraTab.DJ -> Surface(Modifier.fillMaxSize(), color = Color.White) {
+                NowPlayingScreen(
+                    c, onCollapse = { go(lastTab) },
+                    menu = listOf("Queue & Transition Plan" to { go(VelouraTab.QUEUE) }) + mixMenu,
+                    onFindMusic = { go(VelouraTab.SEARCH) },
+                )
+            }
+            VelouraTab.QUEUE -> Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
+                QueueScreen(c, onBack = { go(VelouraTab.DJ) }, menu = mixMenu)
+            }
+            else -> Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
+                Scaffold(
+                    containerColor = VelouraBackground,
+                    topBar = {
+                        when (tab) {
+                            VelouraTab.HOME -> VelouraBrandBar(message, onAccount = { go(VelouraTab.ACCOUNT) }, onSettings = { go(VelouraTab.SETTINGS) })
+                            VelouraTab.SEARCH -> VelouraTitleBar("Search", null, "", {})
+                            VelouraTab.LIBRARY -> VelouraTitleBar("Your Music", null, "", {})
+                            VelouraTab.ACCOUNT -> VelouraTitleBar("YouTube Music Account", PrismIcons.ArrowBack, "Back", { go(VelouraTab.HOME) })
+                            else -> VelouraTitleBar("Mix Settings", PrismIcons.ArrowBack, "Back", { go(lastTab.takeIf { it != VelouraTab.SETTINGS } ?: VelouraTab.HOME) })
+                        }
+                    },
+                    bottomBar = {
+                        VelouraTabBar(
+                            when (tab) {
+                                VelouraTab.HOME -> VelouraTabItem.HOME
+                                VelouraTab.SEARCH -> VelouraTabItem.SEARCH
+                                VelouraTab.LIBRARY -> VelouraTabItem.LIBRARY
+                                else -> null
+                            },
+                        ) { t ->
+                            go(when (t) {
+                                VelouraTabItem.HOME -> VelouraTab.HOME
+                                VelouraTabItem.SEARCH -> VelouraTab.SEARCH
+                                VelouraTabItem.LIBRARY -> VelouraTab.LIBRARY
+                                VelouraTabItem.DJ -> VelouraTab.DJ
+                            })
+                        }
+                    },
+                ) { padding ->
+                    Box(Modifier.fillMaxSize().padding(padding)) {
+                        when (tab) {
+                            VelouraTab.HOME -> HomeScreen(
+                                c, libraryCache,
+                                onSearch = { go(VelouraTab.SEARCH) }, onPlayer = { go(VelouraTab.DJ) },
+                                onLibrary = { go(VelouraTab.LIBRARY) }, onSettings = { go(VelouraTab.SETTINGS) },
+                                onConnect = { showLogin = true }, onMessage = { message = it },
+                            )
+                            VelouraTab.SEARCH -> Search(c) { go(VelouraTab.DJ) }
+                            VelouraTab.LIBRARY -> VelouraLibrary(c, libraryCache, onConnect = { showLogin = true }, onPlayed = { go(VelouraTab.DJ) })
+                            VelouraTab.ACCOUNT -> Account(c, onConnect = { showLogin = true }, onBack = { go(VelouraTab.HOME) })
+                            else -> MixSettings(c)
+                        }
                     }
                 }
             }
@@ -133,173 +143,286 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
     }
 }
 
+/** Turns Intelligent AutoMix on, on its own (Prism's Crossfade and DJ mode would compete with it). */
+private fun autoMixOn(c: AppContainer, on: Boolean = true) {
+    c.settings.setIntelligentAutoMix(on)
+    if (on) { c.settings.setMix(false); c.dj.setOn(false) }
+}
+
+/** Plays [item] (a playlist or a mix) from the start; null when it couldn't, with why. */
+private suspend fun playPlaylist(c: AppContainer, item: com.prism.music.data.model.PlaylistItem): String? {
+    val songs = runCatching { VelouraPlaylists.songs(c, item) }.getOrNull().orEmpty().filter { !it.isEpisode && !it.isLive }
+    if (songs.isEmpty()) return "Couldn't load ${item.title}"
+    val kind = if (VelouraPlaylists.isMix(item)) QueueKind.RADIO else QueueKind.PLAYLIST
+    c.player.playQueue(songs, 0, QueueSource(kind, item.title, originId = VelouraPlaylists.normal(item.id)))
+    return null
+}
+
+/** A playlist's song count from YouTube's subtitle ("Playlist • YouTube Music • 50 songs"), or the subtitle's last part. */
+private fun playlistDetail(subtitle: String): String {
+    val parts = subtitle.split('•', '·').map { it.trim() }.filter { it.isNotEmpty() }
+    return parts.firstOrNull { it.any(Char::isDigit) && (it.contains("song", true) || it.contains("track", true)) }
+        ?: parts.lastOrNull() ?: "Playlist"
+}
+
 @Composable
-private fun NavItem(
-    selected: Boolean,
-    label: String,
-    icon: ImageVector,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
+private fun HomeScreen(
+    c: AppContainer,
+    cache: LibraryCache,
+    onSearch: () -> Unit,
+    onPlayer: () -> Unit,
+    onLibrary: () -> Unit,
+    onSettings: () -> Unit,
+    onConnect: () -> Unit,
+    onMessage: (String?) -> Unit,
 ) {
-    Column(
-        modifier.clip(RoundedCornerShape(18.dp)).clickable(onClick = onClick).padding(vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            Modifier.background(if (selected) Color(0xFFDCEEFF) else Color.Transparent, CircleShape)
-                .padding(horizontal = 18.dp, vertical = 5.dp),
-        ) {
-            Icon(icon, label, tint = if (selected) VelouraBlue else VelouraMuted, modifier = Modifier.size(22.dp))
+    val settings by c.settings.flow.collectAsState()
+    val current by c.player.currentSong.collectAsState()
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        if (cache.home.value == null) {
+            cache.home.value = withContext(Dispatchers.IO) { runCatching { c.ytm.fullHome(pages = 3) }.getOrDefault(emptyList()) }
         }
-        Text(
-            label,
-            color = if (selected) VelouraBlue else VelouraMuted,
-            fontSize = 11.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-        )
     }
-}
-
-@Composable
-private fun BrandHeader(message: String?, onSettings: () -> Unit, onAccount: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().background(Color(0xFCFFFFFF)).statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BrandMark(44.dp)
-        Column(Modifier.padding(start = 11.dp).weight(1f)) {
-            Text("Veloura", color = VelouraNavy, fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic, fontSize = 24.sp)
-            Text(message ?: "Music that never stops moving", color = VelouraMuted, fontSize = 12.sp, maxLines = 1)
+    val shelves by cache.home
+    val items = shelves?.flatMap { it.items }?.filterIsInstance<com.prism.music.data.model.PlaylistItem>()
+        ?.filter { VelouraPlaylists.normal(it.id) != "LM" }?.distinctBy { VelouraPlaylists.normal(it.id) }?.take(12)
+    fun play(item: com.prism.music.data.model.PlaylistItem) {
+        onMessage("Loading ${item.title}…")
+        scope.launch {
+            val error = playPlaylist(c, item)
+            onMessage(error)
+            if (error == null) onPlayer()
         }
-        IconButton(onClick = onSettings) { Icon(PrismIcons.Settings, "Mix settings", tint = VelouraNavy) }
-        IconButton(onClick = onAccount) { Icon(PrismIcons.Person, "YouTube Music account", tint = VelouraNavy) }
     }
-}
-
-@Composable
-private fun PageHeader(title: String, onSettings: (() -> Unit)? = null) {
-    Row(
-        Modifier.fillMaxWidth().background(Color(0xFCFFFFFF)).statusBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BrandMark(30.dp)
-        Text(title, Modifier.padding(start = 12.dp).weight(1f), color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 20.sp)
-        onSettings?.let { IconButton(onClick = it) { Icon(PrismIcons.Settings, "Mix settings", tint = VelouraNavy) } }
+    // Something to mix: what's playing, else the first trending playlist, else Search.
+    fun startMixing() {
+        autoMixOn(c)
+        when {
+            current != null -> onPlayer()
+            !items.isNullOrEmpty() -> play(items.first())
+            else -> onSearch()
+        }
     }
-}
-
-@Composable
-private fun BrandMark(size: androidx.compose.ui.unit.Dp) {
-    Icon(
-        painterResource(R.drawable.ic_veloura_crossfade_v), "Veloura",
-        Modifier.size(size).clip(RoundedCornerShape(size / 3)), tint = Color.Unspecified,
+    VelouraHome(
+        VelouraHomeUi(
+            loggedIn = settings.isLoggedIn,
+            playlists = items?.map { PlaylistCard(it.id, it.title, playlistDetail(it.subtitle), it.thumbnail) },
+            playlistsError = if (shelves?.isEmpty() == true) "Couldn't reach YouTube Music. Try Search." else null,
+            autoMixOn = settings.intelligentAutoMix,
+        ),
+        onSearch = onSearch,
+        onTile = { t ->
+            when (t) {
+                HomeTile.AUTOMIX_PARTY -> {
+                    // Party: every pair mixed, club-style DJ effects.
+                    c.settings.setDjEffects(true)
+                    c.settings.setDjStyle(com.prism.music.data.prefs.DjStyle.CLUB)
+                    startMixing()
+                }
+                HomeTile.DJ_MIXES -> onSettings()
+                HomeTile.GENRES -> onSearch()
+                HomeTile.FOR_YOU -> onLibrary()
+            }
+        },
+        onPlaylist = { card -> items?.firstOrNull { it.id == card.id }?.let(::play) },
+        onSeeAll = onLibrary,
+        onConnect = onConnect,
+        onQuickMix = ::startMixing,
     )
 }
 
+/**
+ * Veloura's DJ workspace inside Prism's complete navigation graph (the Prism-shell build's DJ tab). The Veloura shell
+ * ([AutoMixDjRoot]) shows the same Now Playing full screen.
+ */
 @Composable
-private fun Discover(c: AppContainer, onSearch: () -> Unit, onNowPlaying: () -> Unit) {
-    val current by c.player.currentSong.collectAsState()
+fun VelouraDjScreen(c: AppContainer, bottomPadding: androidx.compose.ui.unit.Dp, onFindMusic: () -> Unit) {
+    var queue by remember { mutableStateOf(false) }
+    MaterialTheme(colorScheme = VelouraColors) {
+        Box(Modifier.fillMaxSize().padding(bottom = bottomPadding)) {
+            if (queue) QueueScreen(c, onBack = { queue = false }, menu = emptyList())
+            else NowPlayingScreen(c, onCollapse = onFindMusic, menu = listOf("Queue & Transition Plan" to { queue = true }), onFindMusic = onFindMusic)
+        }
+    }
+}
+
+/** What AutoMix is doing for the playing song and the next one, in plain words (never more than is planned). */
+@Composable
+private fun autoMixStatus(c: AppContainer, songId: String?, nextId: String?, position: Long): String {
     val settings by c.settings.flow.collectAsState()
-    val feed by produceState<DiscoveryFeed>(DiscoveryFeed.Loading) {
-        value = withContext(Dispatchers.IO) {
-            runCatching {
-                (c.ytm.explore() + c.ytm.home().shelves).flatMap { it.items }
-                    .filterIsInstance<SongItem>().map { it.song }
-                    .filter { !it.isEpisode && !it.isLive }.distinctBy { it.id }.take(12)
-            }.fold(
-                { if (it.isEmpty()) DiscoveryFeed.Error("YouTube Music returned no songs. Try Search.") else DiscoveryFeed.Ready(it) },
-                { DiscoveryFeed.Error(it.message ?: "Could not reach YouTube Music") },
-            )
+    val decision by c.intelligentAutoMixShadow.decision.collectAsState()
+    val blendNow by c.mixState.blend.collectAsState()
+    val blendMark by c.mixState.mark.collectAsState()
+    val exact = decision?.takeIf { it.songId == songId && it.nextSongId == nextId }
+    val plan = exact?.plan
+    return when {
+        !settings.intelligentAutoMix -> "Off · switch on to mix every song into the next"
+        // A blend under way, or about to start (an automatic one, or Next pressed): what's really happening now.
+        blendNow != null -> "Mixing into the next song…"
+        blendMark?.takeIf { it.songId == songId && it.startMs - position in 0..MIX_SOON_MS } != null ->
+            "Mixing into the next song in ${((blendMark!!.startMs - position) / 1000) + 1} s"
+        plan != null -> buildString {
+            append("Next mix in ~${clockOf((plan.transitionAtMs - position).coerceAtLeast(0))} · ")
+            append(plan.boundary.label())
+            append(" · ")
+            append(when {
+                !settings.mixAuto -> "${settings.mixSeconds} s blend"
+                plan.estimated -> "Longer blend"
+                else -> "Smooth blend"
+            })
+            if (settings.sound.djEffects) append(" · DJ: ${settings.sound.djStyle.label}")
         }
-    }
-
-    LazyColumn(contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        item {
-            Text("Discover Music", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 28.sp)
-            Row(
-                Modifier.fillMaxWidth().padding(top = 12.dp).clip(RoundedCornerShape(18.dp)).background(Color.White)
-                    .border(1.dp, Color(0xFFD9E7F5), RoundedCornerShape(18.dp)).clickable(onClick = onSearch).padding(15.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(PrismIcons.Search, null, tint = VelouraMuted)
-                Text("Search songs, artists, playlists", Modifier.padding(start = 11.dp), color = VelouraMuted)
-            }
-        }
-        item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FeatureTile("AutoMix\nParty", PrismIcons.FlameFilled, listOf(Color(0xFF8C55E8), Color(0xFFB54DE1)), Modifier.weight(1f)) {
-                    c.settings.setIntelligentAutoMix(true); c.settings.setMix(false); c.dj.setOn(false)
-                    if (current == null) onSearch() else onNowPlaying()
-                }
-                FeatureTile("DJ\nMixes", PrismIcons.Headphones, listOf(Color(0xFF127CFF), Color(0xFF14B6F0)), Modifier.weight(1f)) {
-                    c.dj.setOn(true); c.settings.setIntelligentAutoMix(false)
-                    if (current == null) onSearch() else onNowPlaying()
-                }
-                FeatureTile("Genres", PrismIcons.Mood, listOf(Color(0xFF16C8A8), Color(0xFF11B8DA)), Modifier.weight(1f), onSearch)
-                FeatureTile("For You", PrismIcons.StarFilled, listOf(Color(0xFFFF9A32), Color(0xFFFF6D3A)), Modifier.weight(1f), onSearch)
-            }
-        }
-        if (!settings.isLoggedIn) item {
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF6FF)), shape = RoundedCornerShape(20.dp)) {
-                Column(Modifier.fillMaxWidth().padding(18.dp)) {
-                    Text("Connect YouTube Music", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 19.sp)
-                    Text("Bring in your liked songs, playlists and recommendations. Veloura never sees your Google password.", color = VelouraMuted, modifier = Modifier.padding(top = 5.dp))
-                    Text("Open the account button above to connect.", color = VelouraBlue, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
-                }
-            }
-        }
-        item { Text("Trending now", color = VelouraNavy, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp) }
-        when (val result = feed) {
-            DiscoveryFeed.Loading -> item { Box(Modifier.fillMaxWidth().height(150.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
-            is DiscoveryFeed.Error -> item { ActionCard("Couldn’t load Discover", result.message, "Open Search", onSearch) }
-            is DiscoveryFeed.Ready -> itemsIndexed(result.songs.take(6), key = { _, song -> song.id }) { index, song ->
-                SongRow(song, clock(song.durationSec * 1000L)) {
-                    c.player.playQueue(result.songs, index, QueueSource(QueueKind.OTHER, "Veloura Discover")); onNowPlaying()
-                }
-            }
-        }
-        item {
-            Text("Quick Mixes", color = VelouraNavy, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp)
-            Card(
-                Modifier.fillMaxWidth().padding(top = 9.dp).clickable {
-                    val on = !settings.intelligentAutoMix
-                    c.settings.setIntelligentAutoMix(on)
-                    if (on) { c.settings.setMix(false); c.dj.setOn(false) }
-                    if (current == null) onSearch() else onNowPlaying()
-                }, colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp),
-            ) {
-                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    WaveBadge()
-                    Column(Modifier.padding(horizontal = 13.dp).weight(1f)) {
-                        Text("Intelligent AutoMix", color = VelouraNavy, fontWeight = FontWeight.ExtraBold)
-                        Text("Real songs · natural, non-stop mixing", color = VelouraMuted, fontSize = 12.sp)
-                    }
-                    Box(Modifier.size(42.dp).clip(CircleShape).background(VelouraBlue), contentAlignment = Alignment.Center) {
-                        Icon(PrismIcons.Play, null, tint = Color.White)
-                    }
-                }
-            }
-        }
+        nextId == null -> "Add another song for a transition"
+        exact != null -> "Analysis complete · no mid-song cue for this pair"
+        else -> "Analysing the current and next song…"
     }
 }
 
 @Composable
-private fun FeatureTile(label: String, icon: ImageVector, colors: List<Color>, modifier: Modifier, onClick: () -> Unit) {
-    Column(
-        modifier.height(104.dp).clip(RoundedCornerShape(16.dp)).background(Brush.linearGradient(colors)).clickable(onClick = onClick).padding(10.dp),
-        verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Icon(icon, null, tint = Color.White, modifier = Modifier.size(25.dp))
-        Text(label, color = Color.White, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Bold)
+private fun NowPlayingScreen(c: AppContainer, onCollapse: () -> Unit, menu: List<Pair<String, () -> Unit>>, onFindMusic: () -> Unit) {
+    val song by c.player.currentSong.collectAsState()
+    val playing by c.player.isPlaying.collectAsState()
+    val settings by c.settings.flow.collectAsState()
+    val queue by c.player.queue.collectAsState()
+    val upNext by c.player.upNext.collectAsState()
+    val liked by c.library.likedIds.collectAsState()
+    val shuffle by c.player.shuffle.collectAsState()
+    val repeat by c.player.repeatMode.collectAsState()
+    var position by remember(song?.id) { mutableLongStateOf(c.player.position) }
+    LaunchedEffect(song?.id, playing) { while (true) { position = c.player.position; delay(if (playing) 250 else 700) } }
+    val next = upNext.firstOrNull()?.let(queue::getOrNull)?.song
+    val status = autoMixStatus(c, song?.id, next?.id, position)
+    val s = song
+    if (s == null) {
+        Column(Modifier.fillMaxSize()) {
+            VelouraTitleBar("Now Playing", PrismIcons.ChevronDown, "Close player", onCollapse, menu)
+            Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+                ActionCard("Choose music to start AutoMix", "Pick music from Home, Search or Library. The player and its transition plan fill in from there.", "Find music", onFindMusic)
+            }
+        }
+        return
     }
+    VelouraNowPlaying(
+        VelouraNowPlayingUi(
+            title = s.title, artist = s.artistText, artwork = s.thumbnail, liked = s.id in liked, playing = playing,
+            positionMs = position, durationMs = c.player.duration.coerceAtLeast(s.durationSec * 1000L),
+            autoMixOn = settings.intelligentAutoMix, status = status, shuffle = shuffle, repeatMode = repeat,
+        ),
+        onCollapse = onCollapse,
+        menu = menu,
+        onSeek = { c.player.seekTo(it) },
+        onLike = { c.library.toggleLike(s) },
+        onAutoMix = { autoMixOn(c, it) },
+        onShuffle = { c.player.toggleShuffle() },
+        onPrevious = { c.player.previous() },
+        onPlayPause = { c.player.togglePlay() },
+        onNext = { c.player.next() },
+        onRepeat = { c.player.cycleRepeat() },
+    )
+}
+
+/** "BPM 122 → 122 · Key 8A → 8A ✓": what's been measured of the two songs, or null when nothing is yet. */
+private fun matchLine(c: AppContainer, fromId: String, toId: String): String? {
+    val a = c.mixTempo.cached(fromId)?.takeIf { it.steady }
+    val b = c.mixTempo.cached(toId)?.takeIf { it.steady }
+    val ka = c.mixTempo.key(fromId)
+    val kb = c.mixTempo.key(toId)
+    val parts = buildList {
+        if (a != null && b != null) add("BPM ${Math.round(a.bpm)} → ${Math.round(b.bpm)}")
+        if (ka != null && kb != null) {
+            val fits = com.prism.music.playback.MusicKey.clash(ka, kb) <= 0.25
+            add("Key ${ka.camelot} → ${kb.camelot}${if (fits) " ✓" else ""}")
+        }
+    }
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+}
+
+/** Whether the two songs' beats can be lined up: steady tempos within 8% of each other, octave-free. */
+private fun beatsMatch(c: AppContainer, fromId: String, toId: String): Boolean {
+    val a = c.mixTempo.cached(fromId)?.takeIf { it.steady } ?: return false
+    val b = c.mixTempo.cached(toId)?.takeIf { it.steady } ?: return false
+    val bb = listOf(b.bpm, b.bpm * 2, b.bpm / 2).minBy { kotlin.math.abs(kotlin.math.ln(it / a.bpm)) }
+    return kotlin.math.abs(a.bpm / bb - 1) <= 0.08
 }
 
 @Composable
-private fun WaveBadge() {
-    Box(Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(Color(0xFFE9F5FF)), contentAlignment = Alignment.Center) {
-        Icon(PrismIcons.Equalizer, null, tint = VelouraBlue, modifier = Modifier.size(25.dp))
+private fun QueueScreen(c: AppContainer, onBack: () -> Unit, menu: List<Pair<String, () -> Unit>>) {
+    val queue by c.player.queue.collectAsState()
+    val currentIndex by c.player.currentIndex.collectAsState()
+    val upNext by c.player.upNext.collectAsState()
+    val decision by c.intelligentAutoMixShadow.decision.collectAsState()
+    val into by c.mixState.into.collectAsState()
+    val settings by c.settings.flow.collectAsState()
+    val playing by c.player.isPlaying.collectAsState()
+    var tab by remember { mutableIntStateOf(0) }
+    var position by remember { mutableLongStateOf(c.player.position) }
+    LaunchedEffect(playing) { while (true) { position = c.player.position; delay(if (playing) 500 else 1000) } }
+    // Play order, not list order: with shuffle on, the next song is not necessarily the row below the current one.
+    // This is the same order PlaybackService plans for, so the card and the actual transition always agree.
+    val coming = upNext.mapNotNull(queue::getOrNull)
+    val current = queue.getOrNull(currentIndex)?.song
+    val next = coming.firstOrNull()?.song
+    val exact = decision?.takeIf { it.songId == current?.id && it.nextSongId == next?.id }
+    val plan = exact?.plan
+    fun row(e: com.prism.music.playback.QueueEntry) =
+        QueueSongUi(e.uid, e.index, e.song.title, e.song.artistText, e.song.thumbnail, e.song.durationSec * 1000L)
+    val duration = current?.let { maxOf(c.player.duration, it.durationSec * 1000L) } ?: 0L
+    val matched = current != null && next != null && beatsMatch(c, current.id, next.id)
+    val ui = VelouraQueueUi(
+        current = queue.getOrNull(currentIndex)?.let(::row),
+        mixOut = plan?.transitionAtMs?.let(::clockOf) ?: if (exact != null) "Song end" else "Analysing",
+        positionMs = position,
+        durationMs = duration,
+        inMs = into?.takeIf { it.songId == current?.id && it.inMs > 0 }?.inMs,
+        outMs = plan?.transitionAtMs,
+        next = coming.firstOrNull()?.let(::row),
+        transitionKind = plan?.let { if (matched) "Beat matched" else it.boundary.label() },
+        mixIn = plan?.entryAtMs?.takeIf { it > 0 }?.let { (if (plan.entryEstimated) "≈" else "") + clockOf(it) },
+        match = if (current != null && next != null) matchLine(c, current.id, next.id) else null,
+        planDetails = buildList {
+            if (plan == null) {
+                add(if (exact != null) "No mid-song cue for this pair: it crossfades at the end of the song." else "Analysing the two songs…")
+            } else {
+                add("Leaves this song at ${clockOf(plan.transitionAtMs)}: ${when (plan.boundary) {
+                    com.prism.music.playback.AutoMixBoundary.PHRASE -> "at a break between sung phrases"
+                    com.prism.music.playback.AutoMixBoundary.BEAT -> "on a measured beat"
+                    com.prism.music.playback.AutoMixBoundary.ESTIMATED -> "a best guess (no clear phrase or beat found)"
+                }}${if (plan.reason == com.prism.music.playback.AutoMixReason.HIGHLIGHT_HEARD) ", after its highlight" else ""}.")
+                add(if (plan.entryAtMs > 0) "The next song comes in at ${clockOf(plan.entryAtMs)}${if (plan.entryEstimated) " (best guess)" else ""}." else "The next song starts from its opening.")
+            }
+            add(if (settings.mixAuto) "Blend length: automatic." else "Blend length: ${settings.mixSeconds} s.")
+            add(if (matched) "Beats lined up: both tempos are clear and close." else "Beats not lined up: a plain blend.")
+            add(if (settings.sound.djEffects) "DJ effects: ${settings.sound.djStyle.label}." else "DJ effects: off.")
+        },
+        upNext = coming.map(::row),
+    )
+    VelouraQueue(
+        ui, tab, { tab = it }, onBack, menu,
+        onPlay = { c.player.skipTo(it.index) },
+        onRemove = { c.player.removeAt(it.index) },
+        onPlayNext = { c.player.moveNext(listOf(it.index)) },
+        onReorder = { order -> applyReorder(c, ui.upNext, order) },
+    )
+}
+
+/**
+ * One row dragged in Up Next ([before] → [after], both in play order): moved in the player's queue, or (shuffled) in the
+ * play order, beside the row it now sits next to.
+ */
+private fun applyReorder(c: AppContainer, before: List<QueueSongUi>, after: List<QueueSongUi>) {
+    val i = before.indices.firstOrNull { before[it].key != after.getOrNull(it)?.key } ?: return
+    val shuffled = c.player.shuffle.value
+    val from = before.indexOfFirst { it.key == after[i].key }
+    if (from > i) {
+        // Moved up to i: it now sits before what was there.
+        val moved = after[i]; val beside = before[i]
+        if (shuffled) c.player.moveInPlayOrder(moved.index, beside.index, after = false) else c.player.move(moved.index, beside.index)
+    } else {
+        // The row at i moved down to k.
+        val moved = before[i]; val k = after.indexOfFirst { it.key == moved.key }
+        val beside = before[k]
+        if (shuffled) c.player.moveInPlayOrder(moved.index, beside.index, after = true) else c.player.move(moved.index, beside.index)
     }
 }
 
@@ -314,130 +437,6 @@ private fun ActionCard(title: String, detail: String, action: String, onClick: (
     }
 }
 
-/**
- * Veloura's DJ workspace inside Prism's complete navigation graph. Home, Search, Library, account connection,
- * settings, lyrics and the full player remain Prism's real screens; this is an additional AutoMix destination.
- */
-@Composable
-fun VelouraDjScreen(c: AppContainer, bottomPadding: androidx.compose.ui.unit.Dp, onFindMusic: () -> Unit) {
-    var plan by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().background(VelouraBackground)) {
-        PageHeader(if (plan) "Queue & Transition Plan" else "Intelligent AutoMix")
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp)
-                .clip(RoundedCornerShape(24.dp)).background(Color(0xFFE9F2FE)).padding(4.dp),
-        ) {
-            SegmentButton("Now Playing", !plan, Modifier.weight(1f)) { plan = false }
-            SegmentButton("AutoMix Plan", plan, Modifier.weight(1f)) { plan = true }
-        }
-        Box(Modifier.weight(1f).fillMaxWidth().padding(bottom = bottomPadding)) {
-            if (plan) QueuePlan(c) { plan = false } else NowPlaying(c, onFindMusic)
-        }
-    }
-}
-
-@Composable
-private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
-    val song by c.player.currentSong.collectAsState()
-    val playing by c.player.isPlaying.collectAsState()
-    val settings by c.settings.flow.collectAsState()
-    val decision by c.intelligentAutoMixShadow.decision.collectAsState()
-    val queue by c.player.queue.collectAsState()
-    val upNext by c.player.upNext.collectAsState()
-    val blendNow by c.mixState.blend.collectAsState()
-    val blendMark by c.mixState.mark.collectAsState()
-    var position by remember(song?.id) { mutableLongStateOf(c.player.position) }
-    LaunchedEffect(song?.id, playing) { while (true) { position = c.player.position; delay(if (playing) 250 else 700) } }
-
-    val next = upNext.firstOrNull()?.let(queue::getOrNull)?.song
-    val exactDecision = decision?.takeIf { it.songId == song?.id && it.nextSongId == next?.id }
-    val plan = exactDecision?.plan
-    val totalDuration = c.player.duration.coerceAtLeast(1)
-    val autoStatus = when {
-        !settings.intelligentAutoMix -> "Off — tap to turn on"
-        // A blend under way, or about to start (an automatic one, or Next pressed): what's really happening now.
-        blendNow != null -> "Mixing into the next song…"
-        blendMark?.takeIf { it.songId == song?.id && it.startMs - position in 0..MIX_SOON_MS } != null ->
-            "Mixing into the next song in ${((blendMark!!.startMs - position) / 1000) + 1} s"
-        plan != null -> "Next mix in ~${clock((plan.transitionAtMs - position).coerceAtLeast(0))} · ${plan.boundary.label()} · ${when {
-            !settings.mixAuto -> "${settings.mixSeconds} s blend"
-            plan.estimated -> "Longer blend"
-            else -> "Short blend"
-        }}${when {
-            !settings.sound.djEffects -> ""
-            else -> " · DJ: ${settings.sound.djStyle.label}"
-        }}"
-        next == null -> "Add another song for a transition"
-        exactDecision != null -> "Analysis complete — no safe early cue for this pair"
-        else -> "Analysing the current and next song…"
-    }
-
-    if (song == null) {
-        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            ActionCard("Choose music to start AutoMix", "Pick music from your personalised Home, Search or Library. The player and transition plan will populate automatically.", "Find music", onFindMusic)
-        }
-        return
-    }
-
-    LazyColumn(contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                AsyncImage(song!!.thumbnail, null, Modifier.fillMaxWidth(0.72f).aspectRatio(1f).clip(RoundedCornerShape(26.dp)))
-                Spacer(Modifier.height(17.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(song!!.title, color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 24.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(song!!.artistText, color = VelouraMuted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Icon(PrismIcons.Heart, "Like", tint = VelouraNavy, modifier = Modifier.size(28.dp))
-                }
-                Slider(position.coerceIn(0, totalDuration).toFloat(), { c.player.seekTo(it.toLong()) }, valueRange = 0f..totalDuration.toFloat(), modifier = Modifier.padding(top = 12.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(clock(position), color = VelouraMuted, fontSize = 12.sp)
-                    Text(clock(totalDuration), color = VelouraMuted, fontSize = 12.sp)
-                }
-            }
-        }
-        item {
-            Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp)) {
-                Row(
-                    Modifier.fillMaxWidth().clickable {
-                        val on = !settings.intelligentAutoMix
-                        c.settings.setIntelligentAutoMix(on)
-                        if (on) { c.settings.setMix(false); c.dj.setOn(false) }
-                    }.padding(16.dp), verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    WaveBadge()
-                    Column(Modifier.padding(horizontal = 12.dp).weight(1f)) {
-                        Text("Intelligent AutoMix", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
-                        Text(autoStatus, color = VelouraBlue, fontSize = 12.sp)
-                    }
-                    Switch(settings.intelligentAutoMix, {
-                        c.settings.setIntelligentAutoMix(it)
-                        if (it) { c.settings.setMix(false); c.dj.setOn(false) }
-                    })
-                }
-            }
-        }
-        item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                IconButton({ c.player.previous() }) { Icon(PrismIcons.Previous, "Previous", Modifier.size(31.dp), tint = VelouraNavy) }
-                IconButton(
-                    { c.player.togglePlay() }, Modifier.size(72.dp).clip(CircleShape).background(Brush.linearGradient(listOf(VelouraBlue, Color(0xFF1265E8)))),
-                ) { Icon(if (playing) PrismIcons.Pause else PrismIcons.Play, if (playing) "Pause" else "Play", Modifier.size(34.dp), tint = Color.White) }
-                IconButton({ c.player.next() }) { Icon(PrismIcons.Next, "Next", Modifier.size(31.dp), tint = VelouraNavy) }
-            }
-        }
-        item {
-            Waveform(
-                progress = (position.toFloat() / totalDuration).coerceIn(0f, 1f),
-                transitionAt = plan?.let { (it.transitionAtMs.toFloat() / totalDuration).coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth().height(58.dp),
-            )
-        }
-        next?.let { following -> item { SongRow(following, plan?.entryAtMs?.let { "Cue ${clock(it)}" } ?: "Up next") { c.player.next() } } }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -788,101 +787,6 @@ private fun SongRow(song: Song, trailing: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun QueuePlan(c: AppContainer, onPicked: () -> Unit) {
-    val queue by c.player.queue.collectAsState()
-    val currentIndex by c.player.currentIndex.collectAsState()
-    val decision by c.intelligentAutoMixShadow.decision.collectAsState()
-    // Play order, not list order: with shuffle on, the next song is not necessarily the row below the current one.
-    // This is the same order PlaybackService plans for, so the card and the actual transition always agree.
-    val upNext by c.player.upNext.collectAsState()
-    val current = queue.getOrNull(currentIndex)?.song
-    val coming = upNext.mapNotNull(queue::getOrNull)
-    val next = coming.firstOrNull()?.song
-    val exactDecision = decision?.takeIf { it.songId == current?.id && it.nextSongId == next?.id }
-    val plan = exactDecision?.plan
-    var showPlan by remember { mutableStateOf(true) }
-
-    if (queue.isEmpty()) {
-        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(20.dp)) {
-                Column(Modifier.padding(18.dp)) {
-                    Text("Your queue is empty", color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Text("Choose a song from Home, Search or Library. Veloura will build the transition plan here.", color = VelouraMuted, modifier = Modifier.padding(top = 6.dp))
-                }
-            }
-        }
-        return
-    }
-
-    LazyColumn(contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
-        item {
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Color(0xFFE9F2FE)).padding(4.dp)) {
-                SegmentButton("Up Next", !showPlan, Modifier.weight(1f)) { showPlan = false }
-                SegmentButton("AutoMix Plan", showPlan, Modifier.weight(1f)) { showPlan = true }
-            }
-        }
-        current?.let { playing -> item { CurrentPlanCard(playing, plan?.transitionAtMs, analysed = exactDecision != null) } }
-        if (showPlan && next != null) item {
-            Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFEAF6FF)), shape = RoundedCornerShape(20.dp)) {
-                Column(Modifier.fillMaxWidth().padding(15.dp)) {
-                    Text(plan?.let { "→ Transition to (${it.boundary.label()})" } ?: "→ Transition to", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 13.sp)
-                    Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        AsyncImage(next.thumbnail, null, Modifier.size(60.dp).clip(RoundedCornerShape(13.dp)))
-                        Column(Modifier.padding(horizontal = 11.dp).weight(1f)) {
-                            Text(next.title, color = VelouraNavy, fontWeight = FontWeight.Black, maxLines = 1)
-                            Text(next.artistText, color = VelouraMuted, maxLines = 1)
-                            Text(
-                                when {
-                                    plan != null -> "Incoming cue ${clock(plan.entryAtMs)}${if (plan.entryEstimated) " (best guess)" else ""}"
-                                    exactDecision != null -> "No safe early cue — normal playback"
-                                    else -> "Waiting for a safe cue"
-                                },
-                                color = VelouraBlue, fontSize = 12.sp,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        item { Text("Up Next", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 20.sp) }
-        itemsIndexed(coming, key = { _, entry -> entry.uid }) { offset, entry ->
-            SongRow(entry.song, "#${offset + 2}") { c.player.skipTo(entry.index); onPicked() }
-        }
-    }
-}
-
-@Composable
-private fun CurrentPlanCard(song: Song, transitionAtMs: Long?, analysed: Boolean) {
-    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(22.dp)) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AsyncImage(song.thumbnail, null, Modifier.size(64.dp).clip(RoundedCornerShape(14.dp)))
-                Column(Modifier.padding(horizontal = 12.dp).weight(1f)) {
-                    Text("NOW PLAYING", color = VelouraOrange, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                    Text(song.title, color = VelouraNavy, fontWeight = FontWeight.Black, maxLines = 1)
-                    Text(song.artistText, color = VelouraMuted, maxLines = 1)
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text("Mix out at", color = VelouraMuted, fontSize = 10.sp)
-                    Text(transitionAtMs?.let(::clock) ?: if (analysed) "Song end" else "Analysing", color = VelouraBlue, fontWeight = FontWeight.Black)
-                }
-            }
-            Waveform(
-                progress = 0f,
-                transitionAt = transitionAtMs?.let { (it.toFloat() / (song.durationSec * 1000L).coerceAtLeast(1)).coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth().height(56.dp).padding(top = 8.dp),
-            )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("0:00", color = VelouraMuted, fontSize = 11.sp)
-                Text("IN", color = VelouraCyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
-                Text("OUT", color = VelouraOrange, fontSize = 11.sp, fontWeight = FontWeight.Black)
-                Text(clock(song.durationSec * 1000L), color = VelouraMuted, fontSize = 11.sp)
-            }
-        }
-    }
-}
-
-@Composable
 private fun SegmentButton(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Box(
         modifier.clip(RoundedCornerShape(20.dp)).background(if (selected) VelouraBlue else Color.Transparent)
@@ -890,25 +794,6 @@ private fun SegmentButton(label: String, selected: Boolean, modifier: Modifier, 
     ) { Text(label, color = if (selected) Color.White else VelouraNavy, fontWeight = FontWeight.Bold) }
 }
 
-@Composable
-private fun Waveform(progress: Float, transitionAt: Float? = null, modifier: Modifier = Modifier) {
-    Canvas(modifier) {
-        val bars = 48
-        val step = size.width / bars
-        repeat(bars) { index ->
-            val x = step * index + step / 2
-            val envelope = 0.28f + 0.72f * kotlin.math.abs(sin(index * 0.47)).toFloat()
-            val h = size.height * envelope
-            val fraction = index.toFloat() / bars
-            val color = when {
-                fraction < progress -> VelouraBlue
-                transitionAt != null && fraction >= transitionAt -> VelouraOrange
-                else -> Color(0xFFD6E1ED)
-            }
-            drawLine(color, Offset(x, (size.height - h) / 2), Offset(x, (size.height + h) / 2), strokeWidth = step * 0.55f, cap = StrokeCap.Round)
-        }
-    }
-}
 
 private suspend fun playYouTubeLink(c: AppContainer, uri: Uri): String? {
     val normalized = ShareLinks.findIn(uri.toString())?.let(Uri::parse) ?: uri

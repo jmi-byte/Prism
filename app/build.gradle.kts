@@ -26,12 +26,12 @@ android {
         applicationId = if (autoMixDjBuild) "com.jmibyte.veloura" else "com.prism.music"
         minSdk = 26
         targetSdk = 36
-        versionCode = if (autoMixDjBuild) 66 else 57
-        versionName = if (autoMixDjBuild) "0.4.2" else "1.8.2"
+        versionCode = if (autoMixDjBuild) 67 else 57
+        versionName = if (autoMixDjBuild) "0.5.0" else "1.8.2"
         vectorDrawables { useSupportLibrary = true }
         // The name under the launcher icon; a side-by-side build (below) is called "Prism Dev" so it can't be mistaken for Prism.
         manifestPlaceholders["appLabel"] = if (autoMixDjBuild) "Veloura" else "@string/app_name"
-        manifestPlaceholders["appIcon"] = if (autoMixDjBuild) "@drawable/ic_automix_dj" else "@mipmap/ic_launcher"
+        manifestPlaceholders["appIcon"] = if (autoMixDjBuild) "@mipmap/ic_veloura" else "@mipmap/ic_launcher"
         // Only the side-by-side test copy can be profiled from adb (simpleperf / Perfetto), for chasing jank (1.7.4).
         manifestPlaceholders["profileable"] = "false"
         // In-app tests (app/src/androidTest, 1.7.9): Prism on a fixed offline setup, YouTube and lyrics answered from
