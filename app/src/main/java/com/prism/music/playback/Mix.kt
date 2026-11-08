@@ -11,7 +11,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.PI
@@ -161,7 +160,8 @@ class MixEngine(
                     abort("error")
                     500L
                 }
-                delay(wait)
+                // Sleeps until the next step, or until [blendSoon] asks for one now.
+                kotlinx.coroutines.withTimeoutOrNull(wait) { wake.receive() }
             }
         }
     }
@@ -169,6 +169,62 @@ class MixEngine(
     fun release() {
         loop?.cancel()
         abort("released")
+    }
+
+    /** Wakes the loop early (a Next asked for a blend). */
+    private val wake = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
+
+    /** A blend the listener asked for with Next: into the next song from the song [first], starting at [second] ms. */
+    private var forced: Pair<String, Long>? = null
+
+    /**
+     * Next, mixed: instead of cutting to the next song, the same kind of blend as an automatic one (its length, cue into
+     * the next song, beat matching and DJ effects) starts in about [QUICK_LEAD_MS], the least the ending's second player
+     * needs to load and fall in step. False when it can't (paused, nothing blendable next, a blend already under way, too
+     * near the end, or a second Next while one is pending): the caller then moves on at once as before. If the blend
+     * can't be made after all, Mix moves on to the next song itself, so Next is never ignored.
+     */
+    fun blendSoon(): Boolean {
+        if (mixMs() == null || !main.isPlaying) return false
+        val item = main.currentMediaItem ?: return false
+        if (main.repeatMode == Player.REPEAT_MODE_ONE) return false
+        val toIndex = main.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET && it != main.currentMediaItemIndex } ?: return false
+        val next = main.getMediaItemAt(toIndex)
+        if (next.mediaId.isBlank() || next.mediaId == item.mediaId || !allowed(item, next)) return false
+        val dur = main.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: return false
+        val pos = main.currentPosition
+        // A second Next while one is pending means "now".
+        if (forced?.first == item.mediaId) return false
+        when (phase) {
+            Phase.IDLE -> Unit
+            Phase.PREPARED, Phase.SYNCING -> {
+                val p = plan
+                // Its own blend is about to start anyway.
+                if (p != null && p.fromId == item.mediaId && p.startMs - pos <= QUICK_LEAD_MS + 1_500) return true
+                abort("Next pressed: blending sooner")
+            }
+            Phase.BLENDING, Phase.SETTLING -> return false
+        }
+        val start = pos + QUICK_LEAD_MS
+        if (dur - start < MIN_QUICK_LEFT_MS) return false
+        forced = item.mediaId to start
+        noPlanFor = null
+        retryFor = null
+        retryCount = 0
+        note("Next: blending ${item.mediaId} into ${next.mediaId} from $start ms")
+        wake.trySend(Unit)
+        return true
+    }
+
+    /** The listener's Next blend for [item], if one is pending. */
+    private fun forcedFor(item: MediaItem): Long? = forced?.takeIf { it.first == item.mediaId }?.second
+
+    /** A Next blend couldn't be made: move on now, as a plain Next would have. */
+    private fun forcedFailed(why: String) {
+        val f = forced ?: return
+        forced = null
+        note("Next blend not possible ($why): moving on")
+        if (main.currentMediaItem?.mediaId == f.first && main.hasNextMediaItem()) main.seekToNextMediaItem()
     }
 
     /** A blend is under way (the next song's tempo is the blend's until it settles): the Speed button waits for it. */
@@ -228,7 +284,7 @@ class MixEngine(
         val musicEnd = tempo.cached(item.mediaId)?.lastSoundMs?.takeIf { it in dur / 2..dur } ?: dur
         val next = main.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET && it != main.currentMediaItemIndex }
             ?.let(main::getMediaItemAt)
-        val earlyAt = usableEarlyStart(next?.let { earlyStart(item, it) }, main.currentPosition, dur)
+        val earlyAt = forcedFor(item) ?: usableEarlyStart(next?.let { earlyStart(item, it) }, main.currentPosition, dur)
         val left = (earlyAt ?: musicEnd) - main.currentPosition
         val planAhead = length + LEAD_MS + PREPARE_MS + 5_000
         // The player's crossfade mark: where the blend should start, as far as it's known yet (once it's being planned,
@@ -243,9 +299,21 @@ class MixEngine(
         }
         if (left > planAhead) return minOf(2000, left - planAhead).coerceAtLeast(250)
         if (noPlanFor == item.mediaId) return 1000
-        val p = makePlan(item, dur, length) ?: run { noPlanFor = item.mediaId; state.mark.value = null; return 1000 }
+        val quick = forcedFor(item) != null
+        val p = makePlan(item, dur, length) ?: run {
+            noPlanFor = item.mediaId; state.mark.value = null
+            if (quick) forcedFailed("no blend for this pair")
+            return 1000
+        }
+        // A Next blend only needs the tail to load from the cache and fall in step.
+        if (quick && p.startMs - main.currentPosition < MIN_SYNC_MS) {
+            noPlanFor = item.mediaId
+            state.mark.value = null
+            forcedFailed("too little time to get ready")
+            return 1000
+        }
         // (The tail can still load while it waits to play along, see [prepared], so only the lead-in itself is needed.)
-        if (main.currentPosition > p.startMs - LEAD_MS - 1000) {
+        if (!quick && main.currentPosition > p.startMs - LEAD_MS - 1000) {
             // Too late to get the tail ready in time (a seek near the end): let this one end on its own.
             note("no blend after ${item.mediaId}: too close to the end to get ready (at ${main.currentPosition} ms, blend at ${p.startMs} ms)")
             noPlanFor = item.mediaId
@@ -335,7 +403,8 @@ class MixEngine(
         // then invalidated the prepared plan on every tick.
         val nextDur = knownDurationMs(next) ?: Long.MAX_VALUE
         val rawEarly = earlyStart(item, next)
-        val early = usableEarlyStart(rawEarly, main.currentPosition, dur)
+        // A Next blend starts where the listener asked; otherwise AutoMix's own early point, while there's time for it.
+        val early = forcedFor(item)?.takeIf { it < dur } ?: usableEarlyStart(rawEarly, main.currentPosition, dur)
         val requestedLength = if (early != null) earlyBlendLengthMs(a, b, earlyEstimated(item, next), earlyLength()) else chosenLength(item, next, a, b, length)
         val len = minOf(requestedLength, dur / 3, nextDur / 3)
         if (len < 1000 || dur < 30_000) return noBlend(item, "a song too short to blend (${dur / 1000} s, next ${nextDur.takeIf { it != Long.MAX_VALUE }?.let { it / 1000 } ?: "?"} s)")
@@ -514,6 +583,7 @@ class MixEngine(
             return 10
         }
         // Hand over: the tail carries the ending song on; the main player moves to the next one, silent.
+        forced = null
         t.volume = 1f
         main.volume = 0f
         // DJ effects: the next song comes in with its bass cut (set before the seek, so its first sound is already cut).
@@ -718,6 +788,8 @@ class MixEngine(
     }
 
     private fun abort(why: String, retry: Boolean = false): Long {
+        // A Next blend that falls through before it started still moves on (Next is never ignored).
+        if (forced != null && phase != Phase.BLENDING && phase != Phase.SETTLING) forcedFailed(why)
         val wasOn = phase != Phase.IDLE
         val failed = plan?.fromId
         if (wasOn) note("blend stopped: $why")
@@ -798,6 +870,10 @@ class MixEngine(
 
         /** About how far ahead of the speaker the audio chain works: the swap is turned this much early. */
         private const val SWAP_LEAD_MS = 120L
+        /** How soon after Next its blend starts: the ending's second player loads (from the cache) and falls in step. */
+        const val QUICK_LEAD_MS = 4_000L
+        /** A Next blend needs at least this much of the song left after its start; otherwise Next moves on at once. */
+        private const val MIN_QUICK_LEFT_MS = 8_000L
 
         /** A guarded early transition must still leave enough time to prepare; otherwise the normal ending is used. */
         fun usableEarlyStart(atMs: Long?, positionMs: Long, durationMs: Long): Long? = atMs?.takeIf {

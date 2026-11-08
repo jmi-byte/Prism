@@ -41,6 +41,11 @@ Veloura-only behaviour is gated by `BuildConfig.AUTOMIX_DJ`.
    Styles: Smooth (bass swap), Club (swap and sweep), Echo out, and Auto (Club when beats are matched, Echo when
    the ending beat is known, Smooth otherwise). Settings live in `SoundPrefs` (`djEffects`, `djStyle`).
 
+6. **Next is mixed too (0.4.1)** (`Mix.kt` `blendSoon`, `PlaybackService.kt`). With AutoMix on, Next starts the
+   same blend as an automatic transition about 4 s later (the outgoing song's second player loads and syncs). A
+   second Next, or any failure to make the blend, moves on at once, so Next is never ignored. The DJ tab counts
+   down "Mixing into the next song in N s".
+
 ## Where the risk is (please focus here)
 
 1. **Audio thread** (`DjEqProcessor.kt`):
@@ -59,12 +64,15 @@ Veloura-only behaviour is gated by `BuildConfig.AUTOMIX_DJ`.
 3. **Best-guess planning** (`IntelligentAutoMixPlanner.kt`). Window bounds (45 s at the earliest, 20 s kept at
    the end), short songs (90 s or more for the best-guess tier), very late highlights, and the incoming cue for
    short next songs.
-4. **Exact-pair guards** (`IntelligentAutoMixActivation`, `PlaybackService.kt`). A plan must only act on the
+4. **Next blend** (`blendSoon`, `forced`, `forcedFailed`). Every path where a requested blend falls through
+   (no plan, too little time, tail not ready, out of step, a seek, a song change) must either move on to the next
+   song or be a deliberate no-op, never leave Next ignored; nor may it skip twice.
+5. **Exact-pair guards** (`IntelligentAutoMixActivation`, `PlaybackService.kt`). A plan must only act on the
    exact current/next pair; queue edits, shuffle, repeat and skips must not run a stale plan. Manual Next jumps
    only to a phrase- or beat-based cue (`nextCueAt`).
-5. **Playlist saving** (`VelouraPlaylists.kt`). Correct handling of `VL` prefixes, Liked Music (`LM`), editorial
+6. **Playlist saving** (`VelouraPlaylists.kt`). Correct handling of `VL` prefixes, Liked Music (`LM`), editorial
    `RDCLAK` playlists, duplicates, and the failure messages.
-6. **Prism build unaffected.** With `AUTOMIX_DJ` false: no DJ processor in the chain, no Veloura settings-search
+7. **Prism build unaffected.** With `AUTOMIX_DJ` false: no DJ processor in the chain, no Veloura settings-search
    entry, identical behaviour.
 
 ## Known limits (not bugs to report unless they are worse than described)

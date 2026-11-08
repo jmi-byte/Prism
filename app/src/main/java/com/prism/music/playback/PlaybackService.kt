@@ -512,10 +512,10 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
     }
 
     /**
-     * Next while Intelligent AutoMix is on uses the analysed incoming cue for this exact pair, when it rests on a
-     * phrase or a beat. Ordinary Next remains unchanged when analysis is unavailable, unsafe, or only a best guess
-     * (that cue is used in automatic blends, which cover it). A listener asking to move now does not wait for the
-     * outgoing song's future automatic transition point.
+     * Next while Intelligent AutoMix is on is mixed like an automatic transition: [MixEngine.blendSoon] starts the same
+     * blend (length, incoming cue, beat matching, DJ effects) a few seconds later. When it can't (paused, a second Next
+     * while one is pending, a pair that isn't blended), Next moves on at once: into the analysed incoming cue when it
+     * rests on a phrase or a beat, otherwise as an ordinary Next.
      */
     internal fun nextWithIntelligentAutoMix(): Boolean {
         if (!com.prism.music.BuildConfig.AUTOMIX_DJ || !c.settings.current.intelligentAutoMix) return false
@@ -523,6 +523,10 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         val toIndex = player.nextMediaItemIndex.takeIf { it != C.INDEX_UNSET && it != player.currentMediaItemIndex } ?: return false
         val to = player.getMediaItemAt(toIndex)
         if (!mayBlend(from, to)) return false
+        if (::mix.isInitialized && mix.blendSoon()) {
+            AudioDiagnostics.log("automix", "Next ${from.mediaId} -> ${to.mediaId}: mixed")
+            return true
+        }
         val a = from.toSong() ?: return false
         val b = to.toSong() ?: return false
         val entry = IntelligentAutoMixActivation.nextCueAt(

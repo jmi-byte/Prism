@@ -344,6 +344,8 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
     val decision by c.intelligentAutoMixShadow.decision.collectAsState()
     val queue by c.player.queue.collectAsState()
     val upNext by c.player.upNext.collectAsState()
+    val blendNow by c.mixState.blend.collectAsState()
+    val blendMark by c.mixState.mark.collectAsState()
     var position by remember(song?.id) { mutableLongStateOf(c.player.position) }
     LaunchedEffect(song?.id, playing) { while (true) { position = c.player.position; delay(if (playing) 250 else 700) } }
 
@@ -353,6 +355,10 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
     val totalDuration = c.player.duration.coerceAtLeast(1)
     val autoStatus = when {
         !settings.intelligentAutoMix -> "Off — tap to turn on"
+        // A blend under way, or about to start (an automatic one, or Next pressed): what's really happening now.
+        blendNow != null -> "Mixing into the next song…"
+        blendMark?.takeIf { it.songId == song?.id && it.startMs - position in 0..MIX_SOON_MS } != null ->
+            "Mixing into the next song in ${((blendMark!!.startMs - position) / 1000) + 1} s"
         plan != null -> "Next mix in ~${clock((plan.transitionAtMs - position).coerceAtLeast(0))} · ${plan.boundary.label()} · ${when {
             !settings.mixAuto -> "${settings.mixSeconds} s blend"
             plan.estimated -> "Longer blend"
@@ -546,6 +552,8 @@ private fun MixSettings(c: AppContainer) {
 }
 
 private const val CROSSFADE_SLIDER_MAX = 12
+/** How close a planned blend must be before the DJ tab counts down to it. */
+private const val MIX_SOON_MS = 6_000L
 
 @Composable
 private fun SettingCard(content: @Composable ColumnScope.() -> Unit) {
