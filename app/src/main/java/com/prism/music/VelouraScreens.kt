@@ -411,6 +411,10 @@ internal fun VelouraNowPlaying(
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
     onRepeat: () -> Unit,
+    /** The cover shows the karaoke lyrics instead ([lyrics] draws them); the lyrics button and the cover switch it. */
+    showLyrics: Boolean = false,
+    onLyrics: () -> Unit = {},
+    lyrics: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val glow = Brush.verticalGradient(listOf(Color(0xFFE9E6FF), Color(0xFFF7EAF6), Color(0xFFFFF3EC), Color.White))
     Column(Modifier.fillMaxSize().background(glow)) {
@@ -419,11 +423,28 @@ internal fun VelouraNowPlaying(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 26.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Artwork(ui.artwork, Modifier.padding(top = 18.dp).fillMaxWidth(0.78f).aspectRatio(1f).shadow(18.dp, RoundedCornerShape(20.dp)), corner = 20.dp, seed = ui.title.hashCode())
+            if (showLyrics && lyrics != null) {
+                // Prism's karaoke lyrics, on a dark ground (they're drawn light), the sung line lighting up word by word.
+                Box(
+                    Modifier.padding(top = 18.dp).fillMaxWidth().height(290.dp).shadow(18.dp, RoundedCornerShape(22.dp)).clip(RoundedCornerShape(22.dp))
+                        .background(Brush.verticalGradient(listOf(Color(0xFF1B2F86), Color(0xFF0B1650), Color(0xFF240E5A))))
+                        .clickable(onClick = onLyrics),
+                ) { lyrics(Modifier.fillMaxSize()) }
+            } else {
+                Artwork(
+                    ui.artwork,
+                    Modifier.padding(top = 18.dp).fillMaxWidth(0.78f).aspectRatio(1f).shadow(18.dp, RoundedCornerShape(20.dp))
+                        .clip(RoundedCornerShape(20.dp)).clickable(enabled = lyrics != null, onClick = onLyrics),
+                    corner = 20.dp, seed = ui.title.hashCode(),
+                )
+            }
             Row(Modifier.fillMaxWidth().padding(top = 24.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(ui.title, color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 23.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text(ui.artist, color = VelouraMuted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (lyrics != null) IconButton(onLyrics) {
+                    Icon(if (showLyrics) PrismIcons.LyricsFilled else PrismIcons.Lyrics, if (showLyrics) "Show the cover" else "Show lyrics", tint = if (showLyrics) VelouraBlue else VelouraNavy, modifier = Modifier.size(26.dp))
                 }
                 IconButton(onLike) {
                     Icon(if (ui.liked) PrismIcons.HeartFilled else PrismIcons.Heart, if (ui.liked) "Unlike" else "Like", tint = if (ui.liked) Color(0xFFFF4F79) else VelouraNavy, modifier = Modifier.size(28.dp))

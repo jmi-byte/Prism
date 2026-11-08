@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -295,6 +296,8 @@ private fun NowPlayingScreen(c: AppContainer, onCollapse: () -> Unit, menu: List
     LaunchedEffect(song?.id, playing) { while (true) { position = c.player.position; delay(if (playing) 250 else 700) } }
     val next = upNext.firstOrNull()?.let(queue::getOrNull)?.song
     val status = autoMixStatus(c, song?.id, next?.id, position)
+    // Kept across songs: lyrics stay up from one song to the next until switched back to the cover.
+    var showLyrics by rememberSaveable { mutableStateOf(false) }
     val s = song
     if (s == null) {
         Column(Modifier.fillMaxSize()) {
@@ -321,6 +324,18 @@ private fun NowPlayingScreen(c: AppContainer, onCollapse: () -> Unit, menu: List
         onPlayPause = { c.player.togglePlay() },
         onNext = { c.player.next() },
         onRepeat = { c.player.cycleRepeat() },
+        showLyrics = showLyrics,
+        onLyrics = { showLyrics = !showLyrics },
+        lyrics = { modifier ->
+            // Prism's own lyrics panel (word-by-word karaoke), with the listener's lyrics settings.
+            val lyricsState = com.prism.music.ui.player.rememberLyricsState(s, opened = showLyrics)
+            CompositionLocalProvider(com.prism.music.ui.theme.LocalAppSettings provides settings) {
+                com.prism.music.ui.player.LyricsPanel(
+                    lyricsState, playing, controlsOpen = true, onRevealControls = {}, onHideControls = {},
+                    modifier = modifier, lyricsGround = false,
+                )
+            }
+        },
     )
 }
 

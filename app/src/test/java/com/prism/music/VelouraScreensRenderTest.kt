@@ -13,6 +13,8 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.padding
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -88,6 +90,25 @@ class VelouraScreensRenderTest {
                 autoMixOn = true, status = "Next mix in ~1:02 · Beat-aligned · Smooth blend · DJ: Auto", shuffle = false, repeatMode = 0,
             ),
             {}, emptyList(), {}, {}, {}, {}, {}, {}, {}, {},
+        )
+    }
+
+    /** The cover switched to lyrics: the panel's place and ground (Prism's own lyrics panel needs the app, so a stand-in). */
+    @Test fun nowPlayingLyrics() = shoot("now-playing-lyrics") {
+        VelouraNowPlaying(
+            VelouraNowPlayingUi(
+                "Feel Alive", "Nova Drive", null, liked = true, playing = true, positionMs = 68_000, durationMs = 222_000,
+                autoMixOn = true, status = "Next mix in ~1:02 · Phrase-aligned · DJ · Auto · ~8 s", shuffle = false, repeatMode = 0,
+            ),
+            {}, emptyList(), {}, {}, {}, {}, {}, {}, {}, {},
+            showLyrics = true, onLyrics = {},
+            lyrics = { m ->
+                Column(m.padding(22.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp)) {
+                    androidx.compose.material3.Text("I can feel it in the night", color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.45f), fontSize = 22.sp)
+                    androidx.compose.material3.Text("Every light is coming alive", color = androidx.compose.ui.graphics.Color.White, fontSize = 26.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Black)
+                    androidx.compose.material3.Text("Never stop, never stop moving", color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.45f), fontSize = 22.sp)
+                }
+            },
         )
     }
 
