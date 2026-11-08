@@ -130,6 +130,9 @@ class MixEngine(
     private var swapped = false
     /** This blend sweeps the two songs' filters. */
     private var sweeping = false
+    /** This blend is a mashup; its stage: 0 coming in, 1 vocals over the beat, 2 the new song whole. */
+    private var mashing = false
+    private var mashStage = 0
     /** This blend echoes the ending song out: 0 not yet, 1 sending into the echo, 2 cut (only its echoes left). */
     private var echoing = false
     private var echoStage = 0
@@ -411,6 +414,8 @@ class MixEngine(
         val djWanted = mainBass != null && djStyle() != null
         val requestedLength = when {
             early == null -> chosenLength(item, next, a, b, length)
+            // A mashup needs a few bars of the two together: about 12 s.
+            djWanted && earlyLength() == null && djStyle() == com.prism.music.data.prefs.DjStyle.MASHUP -> earlyBlendLengthMs(a, b, fixedMs = MASHUP_BLEND_MS)
             djWanted && earlyLength() == null -> earlyBlendLengthMs(a, b, fixedMs = DJ_BLEND_MS)
             else -> earlyBlendLengthMs(a, b, earlyEstimated(item, next), earlyLength())
         }
@@ -600,6 +605,10 @@ class MixEngine(
         swapped = false
         if (swapping) { mainBass?.setBass(0f); tailBass?.setBass(1f) }
         echoing = effects && p.dj == DjBlend.ECHO
+        // Mashup: the incoming song comes in as beat and bass (its vocal range dipped), the outgoing keeps everything.
+        mashing = effects && p.dj == DjBlend.MASHUP
+        mashStage = 0
+        if (mashing) { mainBass?.setMidCut(1f); tailBass?.setBass(1f) }
         echoStage = 0
         if (echoing) tailBass?.setEchoDelay(p.echoDelayMs)
         if (p.dj != DjBlend.PLAIN) note("DJ effects: ${p.dj.name.lowercase()}")
@@ -660,7 +669,11 @@ class MixEngine(
         }
         // A DJ blend keeps both songs up through the middle, the way a DJ mixes: the bass swap and the filters separate
         // them, rather than one fading out before its effect can be heard.
-        val (incoming, outgoing) = if (p.dj != DjBlend.PLAIN) djGains(progress) else curve().gains(progress)
+        val (incoming, outgoing) = when (p.dj) {
+            DjBlend.PLAIN -> curve().gains(progress)
+            DjBlend.MASHUP -> mashupGains(progress)
+            else -> djGains(progress)
+        }
         main.volume = incoming
         t.volume = outgoing
         // The bass swap, a little early: the knobs act on audio still to reach the speaker by about the output's delay.
@@ -673,6 +686,24 @@ class MixEngine(
         if (sweeping) sweepHz((progress + SWAP_LEAD_MS.toFloat() / p.lengthMs).coerceAtMost(1f), p.swapAt).let { (incoming, outgoing) ->
             mainBass?.setLowPass(incoming)
             tailBass?.setLowPass(outgoing)
+        }
+        if (mashing) {
+            val ahead = progress + SWAP_LEAD_MS.toFloat() / p.lengthMs
+            if (mashStage == 0 && ahead >= MASH_VOCALS_AT) {
+                // The old song down to its voice and melody (bass gone, highs trimmed) over the new song's beat.
+                tailBass?.setBass(0f)
+                tailBass?.setLowPass(MASH_VOCAL_TOP_HZ)
+                mashStage = 1
+                note("mashup: vocals over the beat at %.2f".format(progress))
+            } else if (mashStage == 1 && ahead >= MASH_RESOLVE_AT) {
+                // The new song whole again; the old one's voice sweeps away.
+                mainBass?.setMidCut(0f)
+                mashStage = 2
+            }
+            if (mashStage == 2) {
+                val t = ((ahead - MASH_RESOLVE_AT) / (1f - MASH_RESOLVE_AT)).coerceIn(0f, 1f)
+                tailBass?.setLowPass((MASH_VOCAL_TOP_HZ * (SWEEP_OUT_TO_HZ / MASH_VOCAL_TOP_HZ).toDouble().pow(t.toDouble())).toFloat())
+            }
         }
         if (echoing) {
             val ahead = progress + SWAP_LEAD_MS.toFloat() / p.lengthMs
@@ -772,7 +803,10 @@ class MixEngine(
         sweeping = false
         echoing = false
         echoStage = 0
+        mashing = false
+        mashStage = 0
         mainBass?.setBass(1f)
+        mainBass?.setMidCut(0f)
         mainBass?.setLowPass(SweepFilter.OPEN_HZ)
     }
 
@@ -880,6 +914,24 @@ class MixEngine(
 
         /** A mid-song DJ blend's length on Automatic (rounded to whole bars when the beats line up). */
         const val DJ_BLEND_MS = 8_000L
+        /** A mashup's length on Automatic: a few bars of the two together. */
+        const val MASHUP_BLEND_MS = 12_000L
+        /** A mashup's stages: vocals over the beat from here, the new song whole again from [MASH_RESOLVE_AT]. */
+        const val MASH_VOCALS_AT = 0.15f
+        const val MASH_RESOLVE_AT = 0.7f
+        /** The top of the old song's voice band during a mashup. */
+        private const val MASH_VOCAL_TOP_HZ = 4_500f
+
+        /**
+         * The two volumes through a mashup: the new song's beat is fully up by 30%; the old song holds at full until the
+         * mashup resolves (70%), then fades. Both loud together, the EQ keeping them apart (bass and voice each from one).
+         */
+        fun mashupGains(progress: Float): Pair<Float, Float> {
+            val p = progress.coerceIn(0f, 1f)
+            val incoming = sin(minOf(p / 0.3f, 1f) * PI / 2).toFloat()
+            val outgoing = cos(maxOf((p - MASH_RESOLVE_AT) / (1f - MASH_RESOLVE_AT), 0f) * PI / 2).toFloat() * 0.9f
+            return incoming to outgoing
+        }
 
         /**
          * The two volumes (incoming, outgoing) through a DJ blend: the next song is fully up by three-quarters of the way,

@@ -298,6 +298,8 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
         scope.launch { c.settings.flow.map { it.sessionButtons }.distinctUntilChanged().drop(1).collect { updateButtons() } }
         // Veloura's Hook mode: each song jumps to its highlight as soon as that's known.
         if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch { c.bestParts.current.collect { hookIfAsked(it) } }
+        // Veloura's Tempo lock, applied as soon as it's switched or moved.
+        if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch { c.settings.flow.map { it.sound.tempoLock }.distinctUntilChanged().drop(1).collect { applySongSpeed() } }
         // Veloura's AutoMix button shows whether it's on.
         if (com.prism.music.BuildConfig.AUTOMIX_DJ) scope.launch { c.settings.flow.map { it.intelligentAutoMix }.distinctUntilChanged().drop(1).collect { updateButtons() } }
         // The waveform progress bar picked: the playing song (and what's next) get their outlines now, not at the next song.
@@ -445,7 +447,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             override fun afterCasting() {
                 val now = player.currentMediaItem?.toSong()
                 if (now?.isEpisode == true && episodeSpeed != 1f) player.setPlaybackSpeed(episodeSpeed)
-                else if (now != null && !now.isEpisode && !now.isLive && musicSpeed != 1f) player.setPlaybackSpeed(musicSpeed)
+                else if (now != null && !now.isEpisode && !now.isLive && songSpeed(now) != 1f) player.setPlaybackSpeed(songSpeed(now))
                 applyPitch()
             }
 
@@ -780,7 +782,15 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             if (player.playbackParameters.speed != speed) player.setPlaybackSpeed(speed)
         } else {
             // Songs at the speed picked with the Speed button (1.7.4; 1× unless picked, always 1× live or casting).
-            val speed = if (c.cast.casting || song.isLive) 1f else musicSpeed
+            val speed = if (c.cast.casting || song.isLive) 1f else songSpeed(song)
+            // Tempo lock needs the song's tempo: measured now when it isn't yet, then applied.
+            if (com.prism.music.BuildConfig.AUTOMIX_DJ && c.settings.current.sound.tempoLock > 0 && c.mixTempo.djBpm(song.id) == null && !song.isLive) {
+                scope.launch {
+                    val net = !c.dataSaving() && (c.settings.current.mixTempoOnCellular || !c.network.metered.value)
+                    runCatching { c.mixTempo.quickScan(song.id, net) }
+                    applySongSpeed()
+                }
+            }
             // Not mid-blend: the blend sets the tempo itself, and the picked speed comes back once it settles.
             if (player.playbackParameters.speed != speed && (lastWasEpisode || !mixing())) player.setPlaybackSpeed(speed)
             // Watching a podcast isn't a wish for music videos: music after it starts as the song.
@@ -1093,9 +1103,30 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
      * settling (still marked as blending while it sets 1×) or without changing the speed at all.
      */
     private fun restoreMusicSpeed() {
-        if (musicSpeed == 1f || mixing() || player.playbackParameters.speed == musicSpeed) return
         val song = player.currentMediaItem?.toSong() ?: return
-        if (!song.isEpisode && !song.isLive && !c.cast.casting) player.setPlaybackSpeed(musicSpeed)
+        val speed = songSpeed(song)
+        if (speed == 1f || mixing() || player.playbackParameters.speed == speed) return
+        if (!song.isEpisode && !song.isLive && !c.cast.casting) player.setPlaybackSpeed(speed)
+    }
+
+    /**
+     * A song's speed: Veloura's Tempo lock when it's on and the song can stretch to it (±12%, octave-free), else the
+     * speed picked with the Speed button.
+     */
+    private fun songSpeed(song: Song): Float {
+        val lock = c.settings.current.sound.tempoLock
+        if (com.prism.music.BuildConfig.AUTOMIX_DJ && lock > 0 && !song.isLive && !song.isEpisode) {
+            com.prism.music.TempoLock.speedFor(c.mixTempo.djBpm(song.id), lock)?.let { return it }
+        }
+        return musicSpeed
+    }
+
+    /** The playing song at its speed now (Tempo lock switched or changed, or its tempo just measured); not mid-blend. */
+    private fun applySongSpeed() {
+        val song = player.currentMediaItem?.toSong() ?: return
+        if (song.isEpisode || song.isLive || c.cast.casting || mixing()) return
+        val speed = songSpeed(song)
+        if (player.playbackParameters.speed != speed) player.setPlaybackSpeed(speed)
     }
 
     /** Remembers how far into the playing episode the listener is (see [com.prism.music.data.EpisodeProgress]). */

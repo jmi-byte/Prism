@@ -164,6 +164,27 @@ class VelouraScreensRenderTest {
         assertTrue(transitionLength(true, 9, false, false) == "~3 s")
     }
 
+    @Test fun party() = shoot("party") {
+        VelouraParty(
+            VelouraPartyUi(
+                "http://192.168.1.20:8765/p/k7m2qx",
+                listOf(
+                    PartyAddedUi("1", "Brown Munde", "AP Dhillon", null, "Simran"),
+                    PartyAddedUi("2", "Levitating", "Dua Lipa", null, "Jas"),
+                ),
+                null,
+            ),
+            {}, {}, {}, {}, {},
+        )
+    }
+
+    @Test fun savedMixes() = shoot("saved-mixes") {
+        Column(Modifier.fillMaxSize().padding(16.dp)) {
+            SavedMixRow(SavedMixUi("1", "Friday night", "18 songs · DJ · Club · 7 Nov", listOf(null, null, null, null)), {}, {}, {})
+            SavedMixRow(SavedMixUi("2", "Road trip", "32 songs · Crossfade · 2 Nov", listOf(null)), {}, {}, {})
+        }
+    }
+
     @Test fun queuePlan() = shoot("queue-plan") {
         VelouraQueue(sample, 1, {}, {}, emptyList(), {}, {}, {}, {})
     }

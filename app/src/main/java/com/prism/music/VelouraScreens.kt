@@ -288,6 +288,8 @@ data class VelouraHomeUi(
     val playlists: List<PlaylistCard>?,
     val playlistsError: String? = null,
     val autoMixOn: Boolean,
+    /** The moment's mood (label, detail), from the time of day and the car. */
+    val mood: Pair<String, String>? = null,
 )
 
 enum class HomeTile { AUTOMIX_PARTY, DJ_MIXES, GENRES, FOR_YOU }
@@ -301,6 +303,7 @@ internal fun VelouraHome(
     onSeeAll: () -> Unit,
     onConnect: () -> Unit,
     onQuickMix: () -> Unit,
+    onMood: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 18.dp)) {
         Text("Discover Music", Modifier.padding(start = 20.dp, top = 14.dp), color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 27.sp)
@@ -346,6 +349,24 @@ internal fun VelouraHome(
                         Text(p.title, Modifier.padding(top = 7.dp), color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text("♫ ${p.detail}", color = VelouraMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
+                }
+            }
+        }
+        ui.mood?.let { (label, detail) ->
+            Card(
+                Modifier.padding(horizontal = 20.dp).padding(top = 18.dp).fillMaxWidth().clickable(onClick = onMood),
+                colors = CardDefaults.cardColors(containerColor = Color.Transparent), shape = RoundedCornerShape(18.dp),
+            ) {
+                Row(
+                    Modifier.background(Brush.horizontalGradient(listOf(Color(0xFF1D40BA), Color(0xFF6A2BD8)))).padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("RIGHT NOW", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp, fontWeight = FontWeight.Black)
+                        Text(label, color = Color.White, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                        Text(detail, color = Color.White.copy(alpha = 0.85f), fontSize = 12.sp)
+                    }
+                    Text("Set the mood", Modifier.clip(RoundedCornerShape(16.dp)).background(Color.White).padding(horizontal = 12.dp, vertical = 8.dp), color = VelouraNavy, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }
@@ -675,7 +696,8 @@ enum class TransitionStyle(val label: String, val detail: String, val dj: com.pr
     DJ_AUTO("DJ · Auto", "Picks per pair: Club when the beats can be lined up, Echo out when they can't.", com.prism.music.data.prefs.DjStyle.AUTO),
     DJ_CLUB("DJ · Club", "Bass swap and filter sweep: the old song's highs roll away as the new one opens up.", com.prism.music.data.prefs.DjStyle.CLUB),
     DJ_SMOOTH("DJ · Smooth", "Bass swap only: subtle, best on headphones or speakers with bass.", com.prism.music.data.prefs.DjStyle.SMOOTH),
-    DJ_ECHO("DJ · Echo out", "The old song is thrown into a beat-timed echo and trails away as the new one comes in.", com.prism.music.data.prefs.DjStyle.ECHO);
+    DJ_ECHO("DJ · Echo out", "The old song is thrown into a beat-timed echo and trails away as the new one comes in.", com.prism.music.data.prefs.DjStyle.ECHO),
+    DJ_MASHUP("DJ · Mashup", "For a few bars the old song's vocals ride the new song's beat. Only when the beats line up; otherwise Club.", com.prism.music.data.prefs.DjStyle.MASHUP);
 
     companion object {
         fun of(djEffects: Boolean, style: com.prism.music.data.prefs.DjStyle): TransitionStyle =
@@ -701,6 +723,9 @@ data class VelouraMixSettingsUi(
     val hookMode: Boolean = false,
     /** -1: follow each song; else the share of Punjabi & Hindi. */
     val languageMix: Int = -1,
+    /** BPM, 0 off. */
+    val tempoLock: Int = 0,
+    val moodAuto: Boolean = false,
 )
 
 @Composable
@@ -714,6 +739,8 @@ internal fun VelouraMixSettings(
     onHookMode: (Boolean) -> Unit = {},
     onLanguageMix: (Int) -> Unit = {},
     onWeddingMode: () -> Unit = {},
+    onTempoLock: (Int) -> Unit = {},
+    onMoodAuto: (Boolean) -> Unit = {},
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SettingsCard {
@@ -757,6 +784,28 @@ internal fun VelouraMixSettings(
                     Text("Every song starts at its highlight, skipping the intro. Great for discovering music fast.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
                 }
                 Switch(ui.hookMode, onHookMode, colors = SwitchDefaults.colors(checkedTrackColor = VelouraBlue))
+            }
+        }
+        SettingsCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text("Tempo lock", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                    Text("Every song at one pace for a run or a workout, sped up or slowed down without changing its key. Songs that would have to stretch more than 12% play as they are.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
+                }
+                Switch(ui.tempoLock > 0, { onTempoLock(if (it) 160 else 0) }, colors = SwitchDefaults.colors(checkedTrackColor = VelouraBlue))
+            }
+            if (ui.tempoLock > 0) {
+                Text(TempoLock.describe(ui.tempoLock), Modifier.padding(top = 8.dp), color = VelouraBlue, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Slider(ui.tempoLock.toFloat(), { onTempoLock((kotlin.math.round(it / 5f) * 5).toInt()) }, valueRange = 80f..190f, steps = 21)
+            }
+        }
+        SettingsCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text("Adapt to the moment", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                    Text("Transitions follow the time of day and the car by themselves: gentle crossfades in the morning, Club blends in the evening and on the road, soft blends late at night.", color = VelouraMuted, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
+                }
+                Switch(ui.moodAuto, onMoodAuto, colors = SwitchDefaults.colors(checkedTrackColor = VelouraBlue))
             }
         }
         SettingsCard {
@@ -958,6 +1007,94 @@ internal fun VelouraStoryCard(title: String, artist: String, artwork: String?, l
                 Text("Veloura", Modifier.padding(start = 6.dp), color = Color.White, fontWeight = FontWeight.Black, fontStyle = FontStyle.Italic, fontSize = 16.sp)
             }
             Text("Music that never stops moving", color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp)
+        }
+    }
+}
+
+// ---- Party queue ----
+
+data class PartyAddedUi(val key: String, val title: String, val artist: String, val thumbnail: String?, val guest: String)
+
+data class VelouraPartyUi(
+    /** The address guests open, while the party's on. */
+    val link: String?,
+    val added: List<PartyAddedUi>,
+    val message: String? = null,
+)
+
+@Composable
+internal fun VelouraParty(
+    ui: VelouraPartyUi,
+    onBack: () -> Unit,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onRemove: (PartyAddedUi) -> Unit,
+    onBlock: (PartyAddedUi) -> Unit,
+) {
+    Column(Modifier.fillMaxSize().background(VelouraBackground)) {
+        VelouraTitleBar("Party queue", PrismIcons.ArrowBack, "Back", onBack)
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            if (ui.link == null) {
+                Text("Guests on your Wi-Fi scan a code, search YouTube Music and add songs from their own phones, no app needed. Veloura mixes them in.", Modifier.padding(top = 16.dp), color = VelouraMuted, fontSize = 14.sp)
+                Button(onStart, Modifier.padding(top = 16.dp), colors = ButtonDefaults.buttonColors(containerColor = VelouraBlue)) { Text("Start the party") }
+                Text("Only phones on the same Wi-Fi with the party's code can add songs; each phone one song every 20 seconds. You can take out any song and block a phone.", Modifier.padding(top = 14.dp), color = VelouraMuted, fontSize = 12.sp)
+            } else {
+                Card(Modifier.padding(top = 14.dp), colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(22.dp), elevation = CardDefaults.cardElevation(3.dp)) {
+                    Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Scan to add songs", color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                        com.prism.music.ui.screens.QrCode(ui.link, Modifier.padding(top = 12.dp).size(220.dp))
+                        Text(ui.link, Modifier.padding(top = 10.dp), color = VelouraBlue, fontSize = 13.sp, textAlign = TextAlign.Center)
+                        Text("Guests must be on this Wi-Fi", color = VelouraMuted, fontSize = 12.sp)
+                    }
+                }
+                OutlinedButton(onStop, Modifier.padding(top = 12.dp)) { Text("End the party") }
+            }
+            ui.message?.let { Text(it, Modifier.padding(top = 12.dp), color = VelouraNavy) }
+            if (ui.added.isNotEmpty()) {
+                Text("Added by guests", Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 6.dp), color = VelouraNavy, fontWeight = FontWeight.Black, fontSize = 19.sp)
+                ui.added.forEach { a ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(14.dp)).background(Color.White).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Artwork(a.thumbnail, Modifier.size(46.dp), corner = 10.dp, seed = a.title.hashCode())
+                        Column(Modifier.padding(horizontal = 11.dp).weight(1f)) {
+                            Text(a.title, color = VelouraNavy, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${a.artist} · added by ${a.guest}", color = VelouraMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        TextButton({ onRemove(a) }) { Text("Remove") }
+                        TextButton({ onBlock(a) }) { Text("Block", color = Color(0xFFD03050)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---- Saved mixes (Library) ----
+
+data class SavedMixUi(val id: String, val name: String, val detail: String, val thumbnails: List<String?>)
+
+@Composable
+internal fun SavedMixRow(m: SavedMixUi, onPlay: () -> Unit, onToYouTube: () -> Unit, onDelete: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(16.dp)).background(Color.White).clickable(onClick = onPlay).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Up to four covers in a square, like a mix's own art.
+        Box(Modifier.size(58.dp).clip(RoundedCornerShape(12.dp))) {
+            val t = m.thumbnails.take(4)
+            Column {
+                Row { Artwork(t.getOrNull(0), Modifier.size(29.dp), 0.dp, 0); Artwork(t.getOrNull(1), Modifier.size(29.dp), 0.dp, 1) }
+                Row { Artwork(t.getOrNull(2), Modifier.size(29.dp), 0.dp, 2); Artwork(t.getOrNull(3), Modifier.size(29.dp), 0.dp, 3) }
+            }
+        }
+        Column(Modifier.padding(horizontal = 12.dp).weight(1f)) {
+            Text(m.name, color = VelouraNavy, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(m.detail, color = VelouraMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Box {
+            IconButton({ open = true }) { Icon(PrismIcons.MoreVertical, "More", tint = VelouraNavy) }
+            DropdownMenu(open, { open = false }) {
+                DropdownMenuItem({ Text("Play with AutoMix") }, { open = false; onPlay() })
+                DropdownMenuItem({ Text("Save to YouTube Music") }, { open = false; onToYouTube() })
+                DropdownMenuItem({ Text("Delete") }, { open = false; onDelete() })
+            }
         }
     }
 }

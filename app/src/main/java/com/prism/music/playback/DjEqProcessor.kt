@@ -28,6 +28,7 @@ class DjEqProcessor : BaseAudioProcessor() {
     private val kill = BassKill()
     private val sweep = SweepFilter()
     private val echo = EchoOut()
+    private val mids = MidCut()
     private var float = false
     private var channels = 2
     /** Reused between buffers: nothing is allocated on the audio thread once it's big enough. */
@@ -40,6 +41,9 @@ class DjEqProcessor : BaseAudioProcessor() {
 
     /** The low-pass filter's cutoff in Hz; [SweepFilter.OPEN_HZ] (or more) switches it off. Safe from any thread. */
     fun setLowPass(hz: Float) = sweep.setTarget(hz)
+
+    /** 0..1: how far the vocal range (around 1.2 kHz) is dipped, for a mashup's beat-only side. Safe from any thread. */
+    fun setMidCut(level: Float) = mids.setTarget(level)
 
     /** The echo's repeat time; set before [setEchoSend] (it makes the echo's memory if needed). */
     fun setEchoDelay(ms: Double) = echo.setDelay(ms)
@@ -58,6 +62,7 @@ class DjEqProcessor : BaseAudioProcessor() {
         kill.configure(inputAudioFormat.sampleRate, channels)
         sweep.configure(inputAudioFormat.sampleRate, channels)
         echo.configure(inputAudioFormat.sampleRate, channels)
+        mids.configure(inputAudioFormat.sampleRate, channels)
         return inputAudioFormat
     }
 
@@ -65,7 +70,7 @@ class DjEqProcessor : BaseAudioProcessor() {
         val bytes = inputBuffer.remaining()
         if (bytes == 0) return
         val out = replaceOutputBuffer(bytes)
-        if (kill.idle && sweep.idle && echo.idle) {
+        if (kill.idle && sweep.idle && echo.idle && mids.idle) {
             out.put(inputBuffer)
             out.flip()
             return
@@ -76,6 +81,7 @@ class DjEqProcessor : BaseAudioProcessor() {
         for (i in 0 until samples) buf[i] = if (float) inputBuffer.float else inputBuffer.short / 32768f
         kill.process(buf, samples / channels)
         sweep.process(buf, samples / channels)
+        mids.process(buf, samples / channels)
         echo.process(buf, samples / channels)
         for (i in 0 until samples) {
             if (float) out.putFloat(buf[i])
@@ -85,8 +91,8 @@ class DjEqProcessor : BaseAudioProcessor() {
         out.flip()
     }
 
-    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) { kill.clearHistory(); sweep.clearHistory(); echo.clearHistory() }
-    override fun onReset() { kill.clearHistory(); sweep.clearHistory(); echo.clearHistory() }
+    override fun onFlush(streamMetadata: AudioProcessor.StreamMetadata) { kill.clearHistory(); sweep.clearHistory(); echo.clearHistory(); mids.clearHistory() }
+    override fun onReset() { kill.clearHistory(); sweep.clearHistory(); echo.clearHistory(); mids.clearHistory() }
 }
 
 /**
@@ -365,3 +371,79 @@ class EchoOut {
         private const val SILENT = 1e-4f
     }
 }
+
+/**
+ * A mashup's mid knob, apart from Media3 so it can be unit-tested: a peaking EQ (RBJ cookbook) at [CENTER_HZ], wide
+ * enough ([Q]) to cover most of a voice, down [CUT_DB] at full cut; the level glides, and at 0 it's a true pass-through.
+ */
+class MidCut {
+    @Volatile var target = 0f
+        private set
+    private var level = 0f
+    private var rate = 48_000
+    private var channels = 2
+    private var x1 = DoubleArray(2); private var x2 = DoubleArray(2)
+    private var y1 = DoubleArray(2); private var y2 = DoubleArray(2)
+    private var b0 = 1.0; private var b1 = 0.0; private var b2 = 0.0; private var a1 = 0.0; private var a2 = 0.0
+    private var coefFor = Float.NaN
+
+    fun configure(sampleRate: Int, channelCount: Int) {
+        rate = sampleRate.coerceAtLeast(8_000)
+        channels = channelCount.coerceAtLeast(1)
+        x1 = DoubleArray(channels); x2 = DoubleArray(channels); y1 = DoubleArray(channels); y2 = DoubleArray(channels)
+        coefFor = Float.NaN
+    }
+
+    fun setTarget(v: Float) { target = v.coerceIn(0f, 1f) }
+
+    val idle: Boolean get() = target == 0f && level == 0f
+
+    fun clearHistory() { x1.fill(0.0); x2.fill(0.0); y1.fill(0.0); y2.fill(0.0) }
+
+    fun process(buf: FloatArray, frames: Int) {
+        if (idle) return
+        val glide = 1f - kotlin.math.exp(-1f / (GLIDE_SEC * rate))
+        var f = 0
+        while (f < frames) {
+            val n = minOf(BLOCK, frames - f)
+            val goal = target
+            level = if (kotlin.math.abs(goal - level) < 1e-3f) goal else level + (goal - level) * (1f - (1f - glide).pow(n))
+            if (level != coefFor) coefficients(level)
+            for (k in 0 until n) {
+                val base = (f + k) * channels
+                for (ch in 0 until channels) {
+                    val x = buf[base + ch].toDouble()
+                    val y = b0 * x + b1 * x1[ch] + b2 * x2[ch] - a1 * y1[ch] - a2 * y2[ch]
+                    x2[ch] = x1[ch]; x1[ch] = x
+                    y2[ch] = y1[ch]; y1[ch] = y
+                    buf[base + ch] = y.toFloat()
+                }
+            }
+            f += n
+        }
+        if (idle) clearHistory()
+    }
+
+    private fun coefficients(level: Float) {
+        coefFor = level
+        val a = 10.0.pow(level * CUT_DB / 40.0)
+        val w0 = 2 * PI * CENTER_HZ / rate
+        val alpha = sin(w0) / (2 * Q)
+        val cw = cos(w0)
+        val a0 = 1 + alpha / a
+        b0 = (1 + alpha * a) / a0
+        b1 = -2 * cw / a0
+        b2 = (1 - alpha * a) / a0
+        a1 = -2 * cw / a0
+        a2 = (1 - alpha / a) / a0
+    }
+
+    companion object {
+        const val CENTER_HZ = 1_200.0
+        const val CUT_DB = -14.0
+        private const val Q = 0.6
+        private const val GLIDE_SEC = 0.05f
+        private const val BLOCK = 64
+    }
+}
+

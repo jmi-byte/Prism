@@ -3,7 +3,7 @@ package com.prism.music.playback
 import com.prism.music.data.prefs.DjStyle
 
 /** What one blend does, once the listener's [DjStyle] has met the pair of songs. */
-enum class DjBlend { PLAIN, SMOOTH, CLUB, ECHO }
+enum class DjBlend { PLAIN, SMOOTH, CLUB, ECHO, MASHUP }
 
 object DjBlends {
     /**
@@ -15,6 +15,8 @@ object DjBlends {
         DjStyle.SMOOTH -> DjBlend.SMOOTH
         DjStyle.CLUB -> DjBlend.CLUB
         DjStyle.ECHO -> DjBlend.ECHO
+        // A mashup needs the two beats locked together; without that, a Club blend.
+        DjStyle.MASHUP -> if (beatsMatched) DjBlend.MASHUP else DjBlend.CLUB
         // A filter sweep needs no beat, so without one Auto still sweeps (a bass swap alone is lost on a phone's speaker).
         DjStyle.AUTO -> when {
             beatsMatched -> DjBlend.CLUB

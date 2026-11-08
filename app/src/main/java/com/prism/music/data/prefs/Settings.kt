@@ -714,6 +714,10 @@ data class SoundPrefs(
     val hookMode: Boolean = false,
     /** Veloura: Keep the mix going's balance, as the share of Punjabi & Hindi (0..100, the rest English); -1 follows each song. */
     val languageMix: Int = -1,
+    /** Veloura: every song at this tempo (BPM), as far as it stretches (±12%); 0 off. */
+    val tempoLock: Int = 0,
+    /** Veloura: transitions follow the moment (time of day, the car) by themselves. */
+    val moodAuto: Boolean = false,
     /** Normalize volume's level, in LUFS (A2). */
     val normalizeTarget: Int = -14,
     /** An album playing through keeps its own song-to-song levels: one level for the whole album (A2). */
@@ -751,6 +755,7 @@ enum class DjStyle(val label: String, val detail: String) {
     SMOOTH("Smooth", "Bass swap only: the next song comes in without its bass, then the two swap on a beat."),
     CLUB("Club", "Bass swap plus a filter sweep: the outgoing song's highs roll away as the next one opens up."),
     ECHO("Echo out", "The outgoing song is thrown into a beat-timed echo and cut, trailing off as the next song comes in."),
+    MASHUP("Mashup", "For a few bars the old song's vocals ride the new song's beat, then the new song takes over. Needs beats that line up."),
 }
 
 /** How a crossfade's two volumes cross (1.7.8, A1). */
@@ -1901,6 +1906,8 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val keepMixGoing = booleanPreferencesKey("veloura_keep_mix_going")
         val hookMode = booleanPreferencesKey("veloura_hook_mode")
         val languageMix = intPreferencesKey("veloura_language_mix")
+        val tempoLock = intPreferencesKey("veloura_tempo_lock")
+        val moodAuto = booleanPreferencesKey("veloura_mood_auto")
         val mixSeconds = intPreferencesKey("mix_seconds")
         val mixAuto = booleanPreferencesKey("mix_auto")
         val mixBeatMatch = booleanPreferencesKey("mix_beat_match")
@@ -2262,7 +2269,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
                 "hold_seek_seconds", "canvas_with_downloads", "canvas_with_downloads_cellular", "audio_quality", "cellular_quality",
                 "premium_stream", "autoplay", "autoplay_source", "radio_songs_only", "songs_everywhere", "show_track_length",
                 "audio_diagnostics", "search_keyboard", "double_tap_seek_seconds", "stop_on_swipe_away", "data_saver",
-                "video_continues", "lossless", "lossless_local", "normalize", "skip_silence", "mix", "intelligent_auto_mix", "veloura_dj_effects", "veloura_dj_style", "veloura_keep_mix_going", "veloura_hook_mode", "veloura_language_mix", "mix_seconds", "mix_auto",
+                "video_continues", "lossless", "lossless_local", "normalize", "skip_silence", "mix", "intelligent_auto_mix", "veloura_dj_effects", "veloura_dj_style", "veloura_keep_mix_going", "veloura_hook_mode", "veloura_language_mix", "veloura_tempo_lock", "veloura_mood_auto", "mix_seconds", "mix_auto",
                 "mix_beat_match", "mix_tempo_cellular", "content_country", "video_max_height", "cache_size_mb", "download_wifi_only",
                 "download_likes", "smart_downloads", "smart_download_gb", "offline_gb", "smart_downloads_cellular", "eq",
                 "home_layout", "auto_add_sections", "home_hide_kinds", "home_header_picture", "search_sections", "search_chips", "replay_hours", "greeting_text", "greeting_show_name", "home_shortcuts",
@@ -2578,6 +2585,8 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
                 keepMixGoing = p[K.keepMixGoing] ?: d.sound.keepMixGoing,
                 hookMode = p[K.hookMode] ?: d.sound.hookMode,
                 languageMix = (p[K.languageMix] ?: d.sound.languageMix).coerceIn(-1, 100),
+                tempoLock = (p[K.tempoLock] ?: d.sound.tempoLock).coerceIn(0, 200),
+                moodAuto = p[K.moodAuto] ?: d.sound.moodAuto,
                 normalizeTarget = (p[K.normalizeTarget] ?: d.sound.normalizeTarget).coerceIn(-30, -5),
                 normalizeAlbums = p[K.normalizeAlbums] ?: d.sound.normalizeAlbums,
                 musicSpeed = (p[K.musicSpeedDefault] ?: d.sound.musicSpeed).coerceIn(0.5f, 2f),
@@ -3035,6 +3044,8 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
     fun setKeepMixGoing(v: Boolean) = edit { it[K.keepMixGoing] = v }
     fun setHookMode(v: Boolean) = edit { it[K.hookMode] = v }
     fun setLanguageMix(v: Int) = edit { it[K.languageMix] = v.coerceIn(-1, 100) }
+    fun setTempoLock(v: Int) = edit { it[K.tempoLock] = v.coerceIn(0, 200) }
+    fun setMoodAuto(v: Boolean) = edit { it[K.moodAuto] = v }
     fun setMixSeconds(v: Int) = edit { it[K.mixSeconds] = v.coerceIn(1, MAX_CROSSFADE_SECONDS) }
     fun setMixAuto(v: Boolean) = edit { it[K.mixAuto] = v }
     fun setMixBeatMatch(v: Boolean) = edit { it[K.mixBeatMatch] = v }

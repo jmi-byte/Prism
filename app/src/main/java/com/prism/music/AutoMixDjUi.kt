@@ -46,7 +46,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.sin
 
 
-private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ, QUEUE, SIMILAR, ACCOUNT, SETTINGS }
+private enum class VelouraTab { HOME, SEARCH, LIBRARY, DJ, QUEUE, SIMILAR, PARTY, ACCOUNT, SETTINGS }
 
 /** Veloura's UI (laid out in VelouraScreens.kt). Prism's playback and YouTube Music engines remain underneath. */
 @Composable
@@ -58,12 +58,29 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
     // "Arrange as a set" and "Share this moment", over whichever page asked.
     var setDialog by remember { mutableStateOf(false) }
     var storyDialog by remember { mutableStateOf(false) }
+    var saveDialog by remember { mutableStateOf(false) }
+    // "Adapt to the moment": the transition style follows the time of day and the car, checked each minute.
+    val rootContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        var applied: String? = null
+        while (true) {
+            val s = c.settings.current.sound
+            if (s.moodAuto) {
+                val mood = ContextMood.of(ContextMood.now(rootContext))
+                if (mood.label != applied) {
+                    applied = mood.label
+                    applyTransitionStyle(c, mood.style)
+                }
+            } else applied = null
+            delay(60_000)
+        }
+    }
     // Kept while the app is open, so switching tabs doesn't download Home's playlists and the library again.
     val libraryCache = remember { LibraryCache() }
     val link by deepLink.collectAsState()
     var message by remember { mutableStateOf<String?>(null) }
     fun go(t: VelouraTab) {
-        if (t != VelouraTab.DJ && t != VelouraTab.QUEUE && t != VelouraTab.SIMILAR) lastTab = t
+        if (t != VelouraTab.DJ && t != VelouraTab.QUEUE && t != VelouraTab.SIMILAR && t != VelouraTab.PARTY) lastTab = t
         tab = t
     }
 
@@ -76,7 +93,7 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
     }
     // A full-screen page goes back with the system Back, as the design's ⌄ and ← do.
     androidx.activity.compose.BackHandler(enabled = tab != VelouraTab.HOME && !showLogin) {
-        go(when (tab) { VelouraTab.QUEUE, VelouraTab.SIMILAR -> VelouraTab.DJ; VelouraTab.DJ -> lastTab; else -> VelouraTab.HOME })
+        go(when (tab) { VelouraTab.QUEUE, VelouraTab.SIMILAR, VelouraTab.PARTY -> VelouraTab.DJ; VelouraTab.DJ -> lastTab; else -> VelouraTab.HOME })
     }
 
     MaterialTheme(colorScheme = VelouraColors) {
@@ -90,6 +107,7 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
         val mixMenu = listOf("Mix settings" to { go(VelouraTab.SETTINGS) })
         if (setDialog) SetDialog(c) { setDialog = false }
         if (storyDialog) StoryDialog(c) { storyDialog = false }
+        if (saveDialog) SaveMixDialog(c) { saveDialog = false }
         when (tab) {
             // The player and its plan fill the screen, as in the design.
             VelouraTab.DJ -> Surface(Modifier.fillMaxSize(), color = Color.White) {
@@ -98,6 +116,8 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
                     menu = listOf(
                         "More like this" to { go(VelouraTab.SIMILAR) },
                         "Share this moment" to { storyDialog = true },
+                        "Save this mix" to { saveDialog = true },
+                        "Party queue" to { go(VelouraTab.PARTY) },
                         "Arrange queue as a set" to { setDialog = true },
                         "Queue & Transition Plan" to { go(VelouraTab.QUEUE) },
                     ) + mixMenu,
@@ -106,6 +126,9 @@ fun AutoMixDjRoot(c: AppContainer, deepLink: StateFlow<Uri?>) {
             }
             VelouraTab.QUEUE -> Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
                 QueueScreen(c, onBack = { go(VelouraTab.DJ) }, menu = listOf("Arrange queue as a set" to { setDialog = true }) + mixMenu)
+            }
+            VelouraTab.PARTY -> Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
+                PartyScreen(c, onBack = { go(VelouraTab.DJ) })
             }
             VelouraTab.SIMILAR -> Surface(Modifier.fillMaxSize(), color = VelouraBackground) {
                 SimilarScreen(c, onBack = { go(VelouraTab.DJ) })
@@ -196,6 +219,11 @@ private fun HomeScreen(
     val settings by c.settings.flow.collectAsState()
     val current by c.player.currentSong.collectAsState()
     val scope = rememberCoroutineScope()
+    // The moment's mood, looked at again every minute (the hour, the car, headphones).
+    val homeContext = androidx.compose.ui.platform.LocalContext.current
+    var minute by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) { while (true) { delay(60_000); minute++ } }
+    val mood = remember(minute) { ContextMood.of(ContextMood.now(homeContext)) }
     LaunchedEffect(Unit) {
         if (cache.home.value == null) {
             cache.home.value = withContext(Dispatchers.IO) { runCatching { c.ytm.fullHome(pages = 3) }.getOrDefault(emptyList()) }
@@ -227,6 +255,7 @@ private fun HomeScreen(
             playlists = items?.map { PlaylistCard(it.id, it.title, playlistDetail(it.subtitle), it.thumbnail) },
             playlistsError = if (shelves?.isEmpty() == true) "Couldn't reach YouTube Music. Try Search." else null,
             autoMixOn = settings.intelligentAutoMix,
+            mood = mood.label to mood.detail,
         ),
         onSearch = onSearch,
         onTile = { t ->
@@ -246,6 +275,21 @@ private fun HomeScreen(
         onSeeAll = onLibrary,
         onConnect = onConnect,
         onQuickMix = ::startMixing,
+        onMood = {
+            // The mood's transitions now; its set shape on the songs ahead, when there are some.
+            applyTransitionStyle(c, mood.style)
+            autoMixOn(c)
+            scope.launch {
+                val upcoming = c.player.upNext.value.size
+                if (upcoming >= 2) {
+                    val said = arrangeAsSet(c, mood.shape) { _, _ -> }
+                    onMessage("${mood.label}: $said")
+                } else {
+                    onMessage("${mood.label}: ${mood.style.label} transitions")
+                    if (current == null && !items.isNullOrEmpty()) play(items.first())
+                }
+            }
+        },
     )
 }
 
@@ -281,6 +325,7 @@ private fun autoMixStatus(c: AppContainer, songId: String?, nextId: String?, pos
             com.prism.music.playback.DjBlend.SMOOTH -> " · DJ: bass swap"
             com.prism.music.playback.DjBlend.CLUB -> " · DJ: bass swap + filter sweep"
             com.prism.music.playback.DjBlend.ECHO -> " · DJ: echo out"
+            com.prism.music.playback.DjBlend.MASHUP -> " · DJ: mashup"
         }
         blendMark?.takeIf { it.songId == songId && it.startMs - position in 0..MIX_SOON_MS } != null ->
             "Mixing into the next song in ${((blendMark!!.startMs - position) / 1000) + 1} s"
@@ -562,6 +607,87 @@ private fun SetDialog(c: AppContainer, onClose: () -> Unit) {
     )
 }
 
+/** A [TransitionStyle] as settings: crossfade is DJ effects off; a DJ style sets them on with its style. */
+private fun applyTransitionStyle(c: AppContainer, style: TransitionStyle) {
+    c.settings.setDjEffects(style.dj != null)
+    style.dj?.let(c.settings::setDjStyle)
+}
+
+/** "Save this mix": the session's songs in the order they play (played, playing, still to come), and its style. */
+@Composable
+private fun SaveMixDialog(c: AppContainer, onClose: () -> Unit) {
+    val queue = c.player.queue.collectAsState().value
+    val played = c.player.played.collectAsState().value
+    val upNext = c.player.upNext.collectAsState().value
+    val current = c.player.currentIndex.collectAsState().value
+    val settings by c.settings.flow.collectAsState()
+    val songs = remember(queue, played, upNext, current) {
+        (played + listOfNotNull(current.takeIf { it in queue.indices }) + upNext).mapNotNull { queue.getOrNull(it)?.song }
+            .filter { !it.isEpisode && !it.isLive }.distinctBy { it.id }
+    }
+    var name by remember { mutableStateOf("Mix · " + java.text.SimpleDateFormat("d MMM", java.util.Locale.ENGLISH).format(java.util.Date())) }
+    var toYouTube by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Save this mix") },
+        text = {
+            Column {
+                Text("${songs.size} songs in the order they play, mixed ${TransitionStyle.of(settings.sound.djEffects, settings.sound.djStyle).label}. Find it under Library → Mixes.", color = VelouraMuted, fontSize = 13.sp)
+                OutlinedTextField(name, { name = it.take(60) }, Modifier.fillMaxWidth().padding(top = 10.dp), singleLine = true, label = { Text("Name") })
+                Row(Modifier.padding(top = 8.dp).clickable { toYouTube = !toYouTube }, verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(toYouTube, { toYouTube = it })
+                    Text("Also save as a YouTube Music playlist", color = VelouraNavy, fontSize = 14.sp)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton({
+                if (songs.isEmpty()) { onClose(); return@TextButton }
+                c.savedMixes.save(name, songs, TransitionStyle.of(settings.sound.djEffects, settings.sound.djStyle))
+                if (toYouTube) scope.launch {
+                    val made = runCatching { withContext(Dispatchers.IO) { c.ytm.createPlaylist(name, VelouraPlaylists.saveableIds(songs), "A Veloura mix") } }.getOrNull()
+                    if (made != null) c.library.playlistChanged(made)
+                }
+                android.widget.Toast.makeText(context, "Saved $name", android.widget.Toast.LENGTH_SHORT).show()
+                onClose()
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClose) { Text("Cancel") } },
+    )
+}
+
+/** The party queue's host page: start or end it, the QR code, and what guests added. */
+@Composable
+private fun PartyScreen(c: AppContainer, onBack: () -> Unit) {
+    val link by c.partyQueue.link.collectAsState()
+    val added by c.partyQueue.added.collectAsState()
+    var message by remember { mutableStateOf<String?>(null) }
+    VelouraParty(
+        VelouraPartyUi(
+            link, added.map { PartyAddedUi("${it.at}|${it.song.id}", it.song.title, it.song.artistText, it.song.thumbnail, it.guest) }, message,
+        ),
+        onBack = onBack,
+        onStart = {
+            autoMixOn(c)
+            message = if (c.partyQueue.start()) null else "Connect to Wi-Fi (or turn on your hotspot) to start a party."
+        },
+        onStop = { c.partyQueue.stop(); message = "The party's over. Guests can't add songs now." },
+        onRemove = { row ->
+            added.firstOrNull { "${it.at}|${it.song.id}" == row.key }?.let { a ->
+                // Taken out of what's still to come (not the song playing, nor one already played).
+                val now = c.player.currentIndex.value
+                c.player.queue.value.lastOrNull { it.song.id == a.song.id && it.index > now }?.let { c.player.removeAt(it.index) }
+                c.partyQueue.forget(a)
+            }
+        },
+        onBlock = { row ->
+            added.firstOrNull { "${it.at}|${it.song.id}" == row.key }?.let { c.partyQueue.block(it.from); message = "That phone can't add songs now." }
+        },
+    )
+}
+
 /** "Share this moment": the story card, and Share. */
 @Composable
 private fun StoryDialog(c: AppContainer, onClose: () -> Unit) {
@@ -731,6 +857,8 @@ private fun MixSettings(c: AppContainer) {
             keepMixGoing = settings.sound.keepMixGoing,
             hookMode = settings.sound.hookMode,
             languageMix = settings.sound.languageMix,
+            tempoLock = settings.sound.tempoLock,
+            moodAuto = settings.sound.moodAuto,
         ),
         onAutoMix = { autoMixOn(c, it) },
         onStyle = { style ->
@@ -742,6 +870,8 @@ private fun MixSettings(c: AppContainer) {
         onKeepMixGoing = { c.settings.setKeepMixGoing(it) },
         onHookMode = { c.settings.setHookMode(it) },
         onLanguageMix = { c.settings.setLanguageMix(it) },
+        onTempoLock = { c.settings.setTempoLock(it) },
+        onMoodAuto = { c.settings.setMoodAuto(it) },
         onWeddingMode = {
             autoMixOn(c)
             c.settings.setDjEffects(true)
@@ -814,7 +944,11 @@ private fun VelouraLibrary(c: AppContainer, cache: LibraryCache, onConnect: () -
     val liked by c.library.likedShown.collectAsState()
     val library by c.library.playlists.collectAsState()
     val scope = rememberCoroutineScope()
-    var showLiked by remember { mutableStateOf(false) }
+    // Playlists, saved mixes, liked songs.
+    var libTab by remember { mutableIntStateOf(0) }
+    val showLiked = libTab == 2
+    val savedMixes by c.savedMixes.mixes.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
     var message by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf<String?>(null) }
     if (!settings.isLoggedIn) {
@@ -875,8 +1009,9 @@ private fun VelouraLibrary(c: AppContainer, cache: LibraryCache, onConnect: () -
     ) {
         item {
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Color(0xFFE9F2FE)).padding(4.dp)) {
-                SegmentButton("Playlists", !showLiked, Modifier.weight(1f)) { showLiked = false }
-                SegmentButton("Liked songs", showLiked, Modifier.weight(1f)) { showLiked = true }
+                SegmentButton("Playlists", libTab == 0, Modifier.weight(1f)) { libTab = 0 }
+                SegmentButton("Mixes", libTab == 1, Modifier.weight(1f)) { libTab = 1 }
+                SegmentButton("Liked", libTab == 2, Modifier.weight(1f)) { libTab = 2 }
             }
         }
         message?.let { text ->
@@ -886,7 +1021,39 @@ private fun VelouraLibrary(c: AppContainer, cache: LibraryCache, onConnect: () -
                 }
             }
         }
-        if (showLiked) {
+        if (libTab == 1) {
+            item { SectionTitle("Saved mixes", "Sessions you saved with ⋮ → Save this mix in Now Playing") }
+            if (savedMixes.isEmpty()) item {
+                Text("No saved mixes yet. While a mix is playing, open Now Playing's ⋮ menu and choose Save this mix.", color = VelouraMuted, fontSize = 13.sp)
+            }
+            itemsIndexed(savedMixes, key = { _, m -> m.id }) { _, m ->
+                val style = runCatching { TransitionStyle.valueOf(m.style) }.getOrDefault(TransitionStyle.DJ_AUTO)
+                SavedMixRow(
+                    SavedMixUi(
+                        m.id, m.name,
+                        "${m.songs.size} songs · ${style.label} · " + java.text.SimpleDateFormat("d MMM", java.util.Locale.ENGLISH).format(java.util.Date(m.savedAt)),
+                        m.songs.map { it.thumbnail },
+                    ),
+                    onPlay = {
+                        // As it was mixed: its transition style, AutoMix on, the songs in their order.
+                        autoMixOn(c)
+                        c.settings.setDjEffects(style.dj != null)
+                        style.dj?.let(c.settings::setDjStyle)
+                        c.player.playQueue(m.songs, 0, QueueSource(QueueKind.PLAYLIST, m.name))
+                        onPlayed()
+                    },
+                    onToYouTube = {
+                        scope.launch {
+                            val ids = VelouraPlaylists.saveableIds(m.songs)
+                            val made = runCatching { withContext(Dispatchers.IO) { c.ytm.createPlaylist(m.name, ids, "A Veloura mix") } }.getOrNull()
+                            if (made != null) c.library.playlistChanged(made)
+                            android.widget.Toast.makeText(context, if (made != null) "Saved ${m.name} to YouTube Music" else "YouTube Music didn't save it", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onDelete = { c.savedMixes.delete(m.id) },
+                )
+            }
+        } else if (showLiked) {
             if (liked.isEmpty()) item {
                 ActionCard("Your liked songs are syncing", "This can take a moment after the first connection.", "Sync now") {
                     c.library.syncInBackground()

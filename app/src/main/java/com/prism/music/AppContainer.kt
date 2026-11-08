@@ -543,6 +543,9 @@ class AppContainer(val app: Application) {
     /** The songs heard this session, for "No repeats this session" (1.8.2, #159). */
     /** Veloura's "More like this" and "Keep the mix going": similar songs from YouTube Music, by language and sound. */
     val similarSongs by lazy { com.prism.music.SimilarSongs(this) }
+    /** Veloura's saved mixes and party queue. */
+    val savedMixes by lazy { com.prism.music.SavedMixes(app) }
+    val partyQueue by lazy { com.prism.music.PartyQueue(this) }
 
     val sessionHeard by lazy {
         val prefs = app.getSharedPreferences("session_heard", android.content.Context.MODE_PRIVATE)
