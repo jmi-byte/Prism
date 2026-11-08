@@ -254,4 +254,122 @@ class IntelligentAutoMixPlannerTest {
         assertTrue(lyrics.first { !it.isGap }.endEstimated)
         assertTrue(86_000L in IntelligentAutoMixShadow.phraseBoundaries(lyrics, 220_000))
     }
+
+    // Best-guess tier: Veloura mixes every analysed pair mid-song.
+
+    @Test
+    fun theStrictPlannerIsUnchangedWithoutEstimate() {
+        assertNull(IntelligentAutoMixPlanner.plan(220_000, nextDurationMs = 200_000))
+    }
+
+    @Test
+    fun noEvidenceStillGivesAMidSongExitAfterTheHighlight() {
+        val p = IntelligentAutoMixPlanner.plan(220_000, bestPartStartMs = 60_000, nextDurationMs = 200_000, estimate = true)!!
+        assertEquals(88_000L, p.transitionAtMs)
+        assertEquals(AutoMixBoundary.ESTIMATED, p.boundary)
+        assertEquals(AutoMixReason.HIGHLIGHT_HEARD, p.reason)
+        assertTrue(p.estimated)
+    }
+
+    @Test
+    fun noHighlightExitsAroundTheIdealPoint() {
+        val p = IntelligentAutoMixPlanner.plan(220_000, nextDurationMs = 200_000, estimate = true)!!
+        assertEquals(IntelligentAutoMixPlanner.IDEAL_MS, p.transitionAtMs)
+        assertEquals(AutoMixReason.NATURAL_WINDOW, p.reason)
+    }
+
+    @Test
+    fun aBestGuessExitMovesToANearbyLyricLineStart() {
+        val p = IntelligentAutoMixPlanner.plan(
+            220_000, nextDurationMs = 200_000, estimate = true, lineStartsMs = listOf(70_000, 94_500, 120_000),
+        )!!
+        assertEquals(94_500L, p.transitionAtMs)
+    }
+
+    @Test
+    fun aBestGuessExitUsesALooselyMeasuredBeatWithoutLyrics() {
+        // Confidence 3.5 is below the strict tier's 4.0 but Mix still calls it steady.
+        val p = IntelligentAutoMixPlanner.plan(
+            220_000, tempo = tempo(firstBeatMs = 40_250, confidence = 3.5), nextDurationMs = 200_000, estimate = true,
+        )!!
+        assertEquals(AutoMixBoundary.ESTIMATED, p.boundary)
+        assertEquals(0L, (p.transitionAtMs - 40_250) % 500)
+        assertTrue(kotlin.math.abs(p.transitionAtMs - 90_000) <= 250)
+    }
+
+    @Test
+    fun aStrongPlanKeepsItsBoundaryAndOnlyItsCueIsGuessed() {
+        val p = IntelligentAutoMixPlanner.plan(
+            220_000, phraseBoundariesMs = listOf(88_000), nextDurationMs = 200_000, estimate = true,
+        )!!
+        assertEquals(88_000L, p.transitionAtMs)
+        assertEquals(AutoMixBoundary.PHRASE, p.boundary)
+        assertEquals(IntelligentAutoMixPlanner.ESTIMATE_ENTRY_MS, p.entryAtMs)
+        assertTrue(p.entryEstimated)
+        assertTrue(p.estimated)
+    }
+
+    @Test
+    fun aStrongCueIsNotMarkedAsAGuess() {
+        val p = IntelligentAutoMixPlanner.plan(
+            220_000, phraseBoundariesMs = listOf(88_000), estimate = true,
+            nextDurationMs = 220_000, nextBestPartStartMs = 70_000, nextPhraseBoundariesMs = listOf(50_000),
+        )!!
+        assertEquals(50_000L, p.entryAtMs)
+        assertTrue(!p.estimated)
+    }
+
+    @Test
+    fun aBestGuessCueEntersAtTheIncomingHighlight() {
+        assertEquals(75_000L, IntelligentAutoMixPlanner.estimatedEntry(220_000, bestPartStartMs = 75_000))
+    }
+
+    @Test
+    fun aBestGuessCueWithoutAHighlightUsesALineStartNearThirtySeconds() {
+        assertEquals(27_000L, IntelligentAutoMixPlanner.estimatedEntry(220_000, null, lineStartsMs = listOf(12_000, 27_000, 41_000)))
+        assertEquals(IntelligentAutoMixPlanner.ESTIMATE_ENTRY_MS, IntelligentAutoMixPlanner.estimatedEntry(220_000, null))
+    }
+
+    @Test
+    fun aShortIncomingSongStillStartsFromItsOpening() {
+        assertEquals(0L, IntelligentAutoMixPlanner.estimatedEntry(65_000, null))
+        val p = IntelligentAutoMixPlanner.plan(220_000, nextDurationMs = 65_000, estimate = true)!!
+        assertEquals(0L, p.entryAtMs)
+        assertTrue(!p.entryEstimated)
+    }
+
+    @Test
+    fun bestGuessesStillRespectTheBasicGuards() {
+        // No distinct next song, or a song too short to have a middle.
+        assertNull(IntelligentAutoMixPlanner.plan(220_000, nextReady = false, estimate = true))
+        assertNull(IntelligentAutoMixPlanner.plan(80_000, nextDurationMs = 200_000, estimate = true))
+        // A two-minute song is now mixed too, leaving its last 20 s.
+        val p = IntelligentAutoMixPlanner.plan(100_000, nextDurationMs = 200_000, estimate = true)!!
+        assertTrue(p.transitionAtMs in IntelligentAutoMixPlanner.EARLIEST_MS..80_000L)
+    }
+
+    @Test
+    fun aLateHighlightStillLeavesBeforeTheKeptTail() {
+        val p = IntelligentAutoMixPlanner.plan(200_000, bestPartStartMs = 170_000, nextDurationMs = 200_000, estimate = true)!!
+        assertEquals(180_000L, p.transitionAtMs)
+    }
+
+    @Test
+    fun shadowModePassesLyricLineStartsToTheBestGuessTier() {
+        val lines = listOf(LyricLine(70_000, "a"), LyricLine(93_000, "b"), LyricLine(110_000, "c"))
+        val d = IntelligentAutoMixShadow().evaluate(
+            "from", 220_000, "to", null, lines, null, nextDurationMs = 200_000, estimate = true,
+        )
+        assertEquals(93_000L, d.plan!!.transitionAtMs)
+        assertEquals(AutoMixBoundary.ESTIMATED, d.plan!!.boundary)
+    }
+
+    @Test
+    fun aBestGuessGetsALongerBlend() {
+        assertEquals(3_000L, MixEngine.earlyBlendLengthMs(null, null))
+        assertEquals(6_000L, MixEngine.earlyBlendLengthMs(null, null, estimated = true))
+        // 120 BPM: a bar is 2 s, so three bars make exactly six seconds.
+        val t = tempo()
+        assertEquals(6_000L, MixEngine.earlyBlendLengthMs(t, t, estimated = true))
+    }
 }

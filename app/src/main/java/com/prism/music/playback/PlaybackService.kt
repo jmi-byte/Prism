@@ -405,6 +405,7 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             state = c.mixState,
             earlyStart = ::intelligentAutoMixStart,
             earlyIn = ::intelligentAutoMixEntry,
+            earlyEstimated = ::intelligentAutoMixEstimated,
         ).also { it.start() }
         // Prism Connect: the speaker or TV being cast to plays what this player plays, and its volume is the session's.
         sessionPlayer.remote = object : LyricsOverlayPlayer.Remote {
@@ -483,6 +484,14 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             fromSongId = a.id,
             toSongId = b.id,
         )
+    }
+
+    /** Whether the matching decision for this exact pair is a best guess (it then gets the longer blend). */
+    private fun intelligentAutoMixEstimated(from: MediaItem, to: MediaItem): Boolean {
+        val a = from.toSong() ?: return false
+        val b = to.toSong() ?: return false
+        val d = c.intelligentAutoMixShadow.decision.value ?: return false
+        return d.songId == a.id && d.nextSongId == b.id && d.plan?.estimated == true
     }
 
     /**
@@ -919,13 +928,15 @@ open class PlaybackService : MediaLibraryService(), Player.Listener {
             nextBestPartStartMs = inputs.nextBestPartMs,
             nextLyrics = inputs.nextLyrics,
             nextTempo = inputs.nextTempo,
+            // Veloura mixes every analysed pair mid-song; weak evidence gives a labelled best guess, not an end-to-start.
+            estimate = enabled,
         )
         if (decision != before) {
             val p = decision.plan
             AudioDiagnostics.log(
                 "automix-shadow",
                 if (p == null) "${song.id}: no safe early transition (${decision.phraseBoundaryCount} usable phrase boundaries, usable beat ${decision.hasUsableBeat}, next ${input.nextSongId != null})"
-                else "${song.id}: ${if (c.settings.current.intelligentAutoMix) "will" else "would"} transition at ${p.transitionAtMs / 1000} s (${p.reason.name.lowercase()}, ${p.boundary.name.lowercase()}) to ${input.nextSongId} from ${p.entryAtMs / 1000} s",
+                else "${song.id}: ${if (c.settings.current.intelligentAutoMix) "will" else "would"} transition at ${p.transitionAtMs / 1000} s (${p.reason.name.lowercase()}, ${p.boundary.name.lowercase()}) to ${input.nextSongId} from ${p.entryAtMs / 1000} s${if (p.entryEstimated) " (estimated cue)" else ""}",
             )
         }
     }

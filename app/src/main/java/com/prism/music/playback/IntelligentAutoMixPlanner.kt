@@ -9,8 +9,12 @@ import kotlin.math.ceil
 /** Why Intelligent AutoMix chose a transition window. */
 enum class AutoMixReason { HIGHLIGHT_HEARD, NATURAL_WINDOW }
 
-/** The musical landmark used to place a transition. */
-enum class AutoMixBoundary { PHRASE, BEAT }
+/**
+ * The musical landmark used to place a transition. [ESTIMATED] is a best guess (a lyric line start, a loosely measured
+ * beat, or just the time after the highlight) used when the listener wants every pair mixed mid-song: MixEngine gives
+ * it a longer blend so the seam is covered, and the UI never presents it as phrase- or beat-aligned.
+ */
+enum class AutoMixBoundary { PHRASE, BEAT, ESTIMATED }
 
 /** A proposed transition. Playback does not act on this until the integration stage. */
 data class AutoMixPlan(
@@ -19,7 +23,12 @@ data class AutoMixPlan(
     val boundary: AutoMixBoundary,
     /** Where the incoming song starts. Zero means its natural opening. */
     val entryAtMs: Long = 0,
-)
+    /** The incoming cue is a best guess rather than a phrase restart or measured beat. */
+    val entryEstimated: Boolean = false,
+) {
+    /** Either side of this transition is a best guess, so it needs the longer covering blend. */
+    val estimated: Boolean get() = boundary == AutoMixBoundary.ESTIMATED || entryEstimated
+}
 
 /**
  * Picks a conservative place for an early DJ transition.
@@ -47,6 +56,14 @@ object IntelligentAutoMixPlanner {
     const val ENTRY_KEEP_MS = 60_000L
     private const val ENTRY_WINDOW_MS = 14_000L
 
+    // Best-guess tier, only with `estimate = true`.
+    /** Songs shorter than this still play through: there is no real middle to leave from. */
+    const val ESTIMATE_MIN_DURATION_MS = 90_000L
+    /** A lyric line start this close to the target is a better seam than an arbitrary moment. */
+    private const val LINE_SNAP_MS = 8_000L
+    /** Without a known highlight, the incoming song is entered about here (past a typical intro). */
+    const val ESTIMATE_ENTRY_MS = 30_000L
+
     fun plan(
         durationMs: Long,
         bestPartStartMs: Long? = null,
@@ -57,8 +74,39 @@ object IntelligentAutoMixPlanner {
         nextBestPartStartMs: Long? = null,
         nextPhraseBoundariesMs: List<Long> = emptyList(),
         nextTempo: Tempo? = null,
+        /** Allow the best-guess tier: every analysed pair gets a mid-song exit and, where possible, a mid-song entry. */
+        estimate: Boolean = false,
+        /** Start times of every timed lyric line of the outgoing song, for the best-guess tier. */
+        lineStartsMs: List<Long> = emptyList(),
+        nextLineStartsMs: List<Long> = emptyList(),
     ): AutoMixPlan? {
-        if (!nextReady || durationMs < MIN_DURATION_MS) return null
+        if (!nextReady) return null
+        val strict = if (durationMs < MIN_DURATION_MS) null else strictPlan(
+            durationMs, bestPartStartMs, phraseBoundariesMs, tempo,
+            nextDurationMs, nextBestPartStartMs, nextPhraseBoundariesMs, nextTempo,
+        )
+        if (!estimate) return strict
+        if (strict != null) {
+            if (strict.entryAtMs > 0) return strict
+            val guess = estimatedEntry(nextDurationMs, nextBestPartStartMs, nextLineStartsMs, nextTempo)
+            return if (guess > 0) strict.copy(entryAtMs = guess, entryEstimated = true) else strict
+        }
+        return estimatedPlan(
+            durationMs, bestPartStartMs, tempo, lineStartsMs,
+            nextDurationMs, nextBestPartStartMs, nextPhraseBoundariesMs, nextTempo, nextLineStartsMs,
+        )
+    }
+
+    private fun strictPlan(
+        durationMs: Long,
+        bestPartStartMs: Long?,
+        phraseBoundariesMs: List<Long>,
+        tempo: Tempo?,
+        nextDurationMs: Long,
+        nextBestPartStartMs: Long?,
+        nextPhraseBoundariesMs: List<Long>,
+        nextTempo: Tempo?,
+    ): AutoMixPlan? {
 
         val highlightEnd = bestPartStartMs?.takeIf { it in 0 until durationMs }?.plus(HIGHLIGHT_PLAY_MS)
         val target = maxOf(EARLIEST_MS, highlightEnd ?: IDEAL_MS)
@@ -127,6 +175,74 @@ object IntelligentAutoMixPlanner {
         return (anchor + beats * t.periodMs).toLong().takeIf { it in EARLIEST_ENTRY_MS..latest } ?: 0
     }
 
+    /**
+     * The best-guess exit: after the highlight (or around [IDEAL_MS]), moved to the nearest lyric line start, else onto
+     * a loosely measured beat, else taken as is. Null only for a song too short to have a middle.
+     */
+    private fun estimatedPlan(
+        durationMs: Long,
+        bestPartStartMs: Long?,
+        tempo: Tempo?,
+        lineStartsMs: List<Long>,
+        nextDurationMs: Long,
+        nextBestPartStartMs: Long?,
+        nextPhraseBoundariesMs: List<Long>,
+        nextTempo: Tempo?,
+        nextLineStartsMs: List<Long>,
+    ): AutoMixPlan? {
+        if (durationMs < ESTIMATE_MIN_DURATION_MS) return null
+        val highlightEnd = bestPartStartMs?.takeIf { it in 0 until durationMs }?.plus(HIGHLIGHT_PLAY_MS)
+        val earliest = maxOf(EARLIEST_MS, highlightEnd ?: EARLIEST_MS)
+        val latest = minOf(durationMs - KEEP_TAIL_MS, ABSOLUTE_LATEST_MS)
+        // A highlight so late that it runs into the ending: leave as late as the kept tail allows instead of not at all.
+        val lo = if (earliest <= latest) earliest else EARLIEST_MS
+        if (lo > latest) return null
+        val target = (highlightEnd ?: IDEAL_MS).coerceIn(lo, latest)
+        val at = snapToLine(target, lineStartsMs, lo, latest)
+            ?: tempo?.let { looseBeat(target, it, lo, latest) }
+            ?: target
+        var entry = entryPoint(nextDurationMs, nextBestPartStartMs, nextPhraseBoundariesMs, nextTempo)
+        var entryGuess = false
+        if (entry == 0L) {
+            entry = estimatedEntry(nextDurationMs, nextBestPartStartMs, nextLineStartsMs, nextTempo)
+            entryGuess = entry > 0
+        }
+        return AutoMixPlan(
+            at,
+            if (highlightEnd != null) AutoMixReason.HIGHLIGHT_HEARD else AutoMixReason.NATURAL_WINDOW,
+            AutoMixBoundary.ESTIMATED,
+            entry,
+            entryGuess,
+        )
+    }
+
+    /**
+     * The best-guess incoming cue, used only when [entryPoint] found no phrase or beat: the incoming song's highlight
+     * itself (BestParts already pulled it back to a lyric line or bar), else a lyric line start near [ESTIMATE_ENTRY_MS],
+     * else a loosely measured beat there, else that time as is. Zero when the song is too short to enter late.
+     */
+    fun estimatedEntry(durationMs: Long, bestPartStartMs: Long?, lineStartsMs: List<Long> = emptyList(), tempo: Tempo? = null): Long {
+        val latest = minOf(LATEST_ENTRY_MS, durationMs - ENTRY_KEEP_MS)
+        if (latest < EARLIEST_ENTRY_MS) return 0
+        bestPartStartMs?.takeIf { it in EARLIEST_ENTRY_MS..latest }?.let { return it }
+        val target = ESTIMATE_ENTRY_MS.coerceIn(EARLIEST_ENTRY_MS, latest)
+        return snapToLine(target, lineStartsMs, EARLIEST_ENTRY_MS, latest)
+            ?: tempo?.let { looseBeat(target, it, EARLIEST_ENTRY_MS, latest) }
+            ?: target
+    }
+
+    private fun snapToLine(target: Long, lineStartsMs: List<Long>, lo: Long, hi: Long): Long? =
+        lineStartsMs.filter { it in lo..hi && abs(it - target) <= LINE_SNAP_MS }
+            .minWithOrNull(compareBy<Long> { abs(it - target) }.thenBy { it })
+
+    /** A beat from the nearest anchor, accepted at Mix's lower "steady" confidence and any extrapolation distance. */
+    private fun looseBeat(target: Long, t: Tempo, lo: Long, hi: Long): Long? {
+        if (!t.steady || t.bpm <= 0 || t.firstBeatMs < 0 || t.outroBeatMs < 0) return null
+        val anchor = listOf(t.firstBeatMs, t.outroBeatMs).minBy { abs(it - target) }
+        val at = (anchor + Math.round((target - anchor) / t.periodMs) * t.periodMs).toLong()
+        return at.takeIf { it in lo..hi }
+    }
+
     private const val FALLBACK_ENTRY_MS = 20_000L
     private const val FALLBACK_LATEST_ENTRY_MS = 45_000L
 
@@ -191,6 +307,8 @@ class IntelligentAutoMixShadow {
         nextBestPartStartMs: Long? = null,
         nextLyrics: List<LyricLine> = emptyList(),
         nextTempo: Tempo? = null,
+        /** Every analysed pair gets a mid-song transition, best-guess when no phrase or beat is reliable. */
+        estimate: Boolean = false,
     ): AutoMixShadowDecision {
         val boundaries = phraseBoundaries(lyrics, durationMs)
         val nextBoundaries = phraseBoundaries(nextLyrics, nextDurationMs)
@@ -202,6 +320,7 @@ class IntelligentAutoMixShadow {
             plan = IntelligentAutoMixPlanner.plan(
                 durationMs, bestPartStartMs, boundaries, tempo, nextReady,
                 nextDurationMs, nextBestPartStartMs, nextBoundaries, nextTempo,
+                estimate, lineStarts(lyrics, durationMs), lineStarts(nextLyrics, nextDurationMs),
             ),
             bestPartStartMs = bestPartStartMs,
             phraseBoundaryCount = usableBoundaries.size,
@@ -215,6 +334,10 @@ class IntelligentAutoMixShadow {
         private const val MIN_MEASURED_GAP_MS = 6_000L
         /** With plain LRC only line starts are known; a long interval is conservative evidence of a phrase restart. */
         private const val MIN_UNMEASURED_LINE_INTERVAL_MS = 10_000L
+
+        /** Where sung lines begin: weaker evidence than [phraseBoundaries], used only by the best-guess tier. */
+        fun lineStarts(lines: List<LyricLine>, durationMs: Long): List<Long> =
+            lines.filter { it.timeMs in 0..durationMs && !it.isGap }.map { it.timeMs }.distinct().sorted()
 
         /**
          * Safe outgoing-song boundaries from timed lyrics: the edges of explicit instrumental gaps, the measured end

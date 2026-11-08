@@ -347,7 +347,7 @@ private fun NowPlaying(c: AppContainer, onFindMusic: () -> Unit) {
     val totalDuration = c.player.duration.coerceAtLeast(1)
     val autoStatus = when {
         !settings.intelligentAutoMix -> "Off — tap to turn on"
-        plan != null -> "Next mix in ~${clock((plan.transitionAtMs - position).coerceAtLeast(0))} · ${plan.boundary.label()} · Short blend"
+        plan != null -> "Next mix in ~${clock((plan.transitionAtMs - position).coerceAtLeast(0))} · ${plan.boundary.label()} · ${if (plan.estimated) "Longer blend" else "Short blend"}"
         next == null -> "Add another song for a transition"
         exactDecision != null -> "Analysis complete — no safe early cue for this pair"
         else -> "Analysing the current and next song…"
@@ -597,7 +597,7 @@ private fun QueuePlan(c: AppContainer, onPicked: () -> Unit) {
                             Text(next.artistText, color = VelouraMuted, maxLines = 1)
                             Text(
                                 when {
-                                    plan != null -> "Incoming cue ${clock(plan.entryAtMs)}"
+                                    plan != null -> "Incoming cue ${clock(plan.entryAtMs)}${if (plan.entryEstimated) " (best guess)" else ""}"
                                     exactDecision != null -> "No safe early cue — normal playback"
                                     else -> "Waiting for a safe cue"
                                 },
@@ -701,4 +701,5 @@ private fun clock(ms: Long): String {
 private fun com.prism.music.playback.AutoMixBoundary.label(): String = when (this) {
     com.prism.music.playback.AutoMixBoundary.PHRASE -> "Phrase-aligned"
     com.prism.music.playback.AutoMixBoundary.BEAT -> "Beat-aligned"
+    com.prism.music.playback.AutoMixBoundary.ESTIMATED -> "Best-guess point"
 }
